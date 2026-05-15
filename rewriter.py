@@ -111,8 +111,22 @@ def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
                             ),
                             "enum": ["Argentina", "Latinoamerica", "Internacional"]
                         },
+                        "ig_relevancia": {
+                            "type": "integer",
+                            "description": (
+                                "Puntaje de 1 a 10 que indica qué tan relevante e interesante es esta noticia "
+                                "para publicar en Instagram para una audiencia argentina. "
+                                "10 = noticia de máximo impacto, viral, que genera debate (política nacional, economía, escándalo, tragedia, deporte de alto perfil). "
+                                "7-9 = noticia importante del día, amplio interés general. "
+                                "4-6 = noticia de interés moderado, nicho o local menor. "
+                                "1-3 = noticia irrelevante, muy específica, técnica o de poco interés masivo. "
+                                "Solo las notas con puntaje 7 o más se publicarán en Instagram."
+                            ),
+                            "minimum": 1,
+                            "maximum": 10
+                        },
                     },
-                    "required": ["titulo", "cuerpo_html", "caption_instagram", "texto_whatsapp", "categoria", "region"],
+                    "required": ["titulo", "cuerpo_html", "caption_instagram", "texto_whatsapp", "categoria", "region", "ig_relevancia"],
                 },
             }],
             tool_choice={"type": "tool", "name": "publicar_noticia"},
@@ -129,6 +143,7 @@ TEXTO ORIGINAL:
                 data = block.input
                 categoria = data.get("categoria", "").strip()
                 region = data.get("region", "Argentina").strip()
+                ig_relevancia = int(data.get("ig_relevancia", 5))
                 return {
                     "title": data.get("titulo", title),
                     "body_html": data.get("cuerpo_html", f"<p>{original_text[:500]}</p>"),
@@ -136,6 +151,7 @@ TEXTO ORIGINAL:
                     "whatsapp_text": data.get("texto_whatsapp", ""),
                     "categoria": categoria,
                     "region": region,
+                    "ig_relevancia": ig_relevancia,
                 }
 
         raise ValueError("No se recibió respuesta del tool")
@@ -149,4 +165,5 @@ TEXTO ORIGINAL:
             "whatsapp_text": f"{title[:400]}",
             "categoria": "",
             "region": "Argentina",
+            "ig_relevancia": 5,
         }

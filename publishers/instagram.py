@@ -1,53 +1,30 @@
 """
 Publica en Instagram Business usando Meta Graph API (Content Publishing).
-Requiere que la imagen esté en una URL pública accesible (se usa imgbb como hosting temporal).
+El control de límite diario y ventanas horarias se maneja en main.py a través de la cola.
 """
 import requests
 import logging
+import time
 import config
 
 logger = logging.getLogger(__name__)
 
 GRAPH_URL = "https://graph.facebook.com/v19.0"
-IMGBB_API_KEY = None  # Opcional: configurar si se usa imgbb
-
-
-def _upload_to_imgbb(image_path: str) -> str | None:
-    """Sube la imagen a imgbb y retorna la URL pública."""
-    if not IMGBB_API_KEY:
-        return None
-    try:
-        import base64
-        with open(image_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        resp = requests.post(
-            "https://api.imgbb.com/1/upload",
-            data={"key": IMGBB_API_KEY, "image": b64},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()["data"]["url"]
-    except Exception as e:
-        logger.error(f"imgbb upload error: {e}")
-        return None
 
 
 def post_image(image_path: str, caption: str, public_image_url: str = None) -> str | None:
     """
-    Publica el flyer en Instagram.
-    public_image_url: URL pública de la imagen (requerido por Meta Graph API).
-    Retorna el post ID o None.
+    Publica una imagen en Instagram.
+    public_image_url: URL pública accesible por Meta (requerido).
+    image_path: no se usa directamente (la imagen ya está en WP como URL pública).
+    Retorna el post ID o None si falla.
     """
     try:
-        # Si no hay URL pública, intentar con imgbb
-        if not public_image_url:
-            public_image_url = _upload_to_imgbb(image_path)
-
         if not public_image_url:
             logger.error("Instagram: no hay URL pública de imagen disponible.")
             return None
 
-        # Paso 1: crear container
+        # Paso 1: crear container de media
         container_resp = requests.post(
             f"{GRAPH_URL}/{config.IG_ACCOUNT_ID}/media",
             data={
@@ -61,10 +38,28 @@ def post_image(image_path: str, caption: str, public_image_url: str = None) -> s
         container_id = container_resp.json().get("id")
 
         if not container_id:
-            logger.error("Instagram: no se obtuvo container_id")
+            logger.error(f"Instagram: no se obtuvo container_id. Respuesta: {container_resp.text[:200]}")
             return None
 
-        # Paso 2: publicar el container
+        # Paso 2: esperar y verificar que el container esté listo
+        time.sleep(4)
+        status_resp = requests.get(
+            f"{GRAPH_URL}/{container_id}",
+            params={"fields": "status_code,status", "access_token": config.META_ACCESS_TOKEN},
+            timeout=15,
+        )
+        status_data = status_resp.json()
+        status_code = status_data.get("status_code", "")
+
+        if status_code == "ERROR":
+            logger.error(f"Instagram: container con error: {status_data}")
+            return None
+        if status_code not in ("FINISHED", "PUBLISHED", ""):
+            # Esperar un poco más si todavía está procesando
+            logger.info(f"Instagram: container en estado '{status_code}', esperando...")
+            time.sleep(5)
+
+        # Paso 3: publicar
         publish_resp = requests.post(
             f"{GRAPH_URL}/{config.IG_ACCOUNT_ID}/media_publish",
             data={
@@ -77,6 +72,11 @@ def post_image(image_path: str, caption: str, public_image_url: str = None) -> s
         post_id = publish_resp.json().get("id")
         logger.info(f"Instagram: publicado ID={post_id}")
         return post_id
+
+    except requests.HTTPError as e:
+        body = e.response.text if e.response else ""
+        logger.error(f"Instagram HTTP error: {e} | {body[:300]}")
+        return None
     except Exception as e:
         logger.error(f"Instagram post_image error: {e}")
         return None
