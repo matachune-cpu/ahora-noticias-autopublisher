@@ -101,8 +101,18 @@ def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
                                 "Si es de una provincia argentina específica, poné el nombre de la provincia (ej: Córdoba, Tucumán, Santiago del Estero)."
                             )
                         },
+                        "region": {
+                            "type": "string",
+                            "description": (
+                                "Región geográfica principal de la noticia. Elegí UNA sola opción: "
+                                "'Argentina' si el tema principal ocurre en Argentina, "
+                                "'Latinoamerica' si ocurre en otro país de América Latina o el Caribe, "
+                                "'Internacional' si ocurre fuera de América Latina."
+                            ),
+                            "enum": ["Argentina", "Latinoamerica", "Internacional"]
+                        },
                     },
-                    "required": ["titulo", "cuerpo_html", "caption_instagram", "texto_whatsapp", "categoria"],
+                    "required": ["titulo", "cuerpo_html", "caption_instagram", "texto_whatsapp", "categoria", "region"],
                 },
             }],
             tool_choice={"type": "tool", "name": "publicar_noticia"},
@@ -118,12 +128,14 @@ TEXTO ORIGINAL:
             if block.type == "tool_use":
                 data = block.input
                 categoria = data.get("categoria", "").strip()
+                region = data.get("region", "Argentina").strip()
                 return {
                     "title": data.get("titulo", title),
                     "body_html": data.get("cuerpo_html", f"<p>{original_text[:500]}</p>"),
                     "instagram_caption": data.get("caption_instagram", ""),
                     "whatsapp_text": data.get("texto_whatsapp", ""),
                     "categoria": categoria,
+                    "region": region,
                 }
 
         raise ValueError("No se recibió respuesta del tool")
@@ -136,4 +148,5 @@ TEXTO ORIGINAL:
             "instagram_caption": f"{title}\n\n#noticias #argentina",
             "whatsapp_text": f"{title[:400]}",
             "categoria": "",
+            "region": "Argentina",
         }

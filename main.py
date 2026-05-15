@@ -27,16 +27,25 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
+REGION_PRIORITY = {"Argentina": 0, "Latinoamerica": 1, "Internacional": 2}
+
+
+def _region_sort_key(item):
+    region = item.get("region", "Argentina")
+    return REGION_PRIORITY.get(region, 2)
+
+
 def process_source(source: dict):
     logger.info(f"Procesando fuente: {source['name']}")
     entries = fetch_entries(source, max_items=source.get("max_articles", config.MAX_ARTICLES_PER_RUN))
     processed = 0
 
+    # Pre-filtrar entradas no publicadas y extraer + reescribir para poder ordenar por región
+    pending = []
     for entry in entries:
         url = entry["url"]
         if not url:
             continue
-
         if database.is_published(url):
             logger.debug(f"Ya publicado: {url}")
             continue
@@ -49,8 +58,20 @@ def process_source(source: dict):
             logger.warning(f"No se pudo extraer: {url}")
             continue
 
-        # 2. Reescribir con Claude (incluye categoría)
+        # 2. Reescribir con Claude (incluye categoría y región)
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
+        pending.append({"url": url, "article": article, "rewritten": rewritten, "region": rewritten.get("region", "Argentina")})
+
+    # Ordenar: Argentina primero, luego Latinoamérica, luego Internacional
+    pending.sort(key=_region_sort_key)
+    if pending:
+        regions = [p["region"] for p in pending]
+        logger.info(f"  → Orden por región: {regions}")
+
+    for item in pending:
+        url = item["url"]
+        article = item["article"]
+        rewritten = item["rewritten"]
         categoria = rewritten.get("categoria", "")
 
         # 3. Verificar marca de agua en la imagen

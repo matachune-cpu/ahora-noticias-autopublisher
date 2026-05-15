@@ -1,50 +1,49 @@
 """
 Publica en Instagram Business usando Meta Graph API (Content Publishing).
-Requiere que la imagen esté en una URL pública accesible (se usa imgbb como hosting temporal).
+Límite diario: 15 posts para no superar el máximo de la API (50/día).
 """
 import requests
 import logging
+import sqlite3
+from datetime import date
 import config
 
 logger = logging.getLogger(__name__)
 
 GRAPH_URL = "https://graph.facebook.com/v19.0"
-IMGBB_API_KEY = None  # Opcional: configurar si se usa imgbb
+IG_DAILY_LIMIT = 15
+DB_PATH = "published_articles.db"
 
 
-def _upload_to_imgbb(image_path: str) -> str | None:
-    """Sube la imagen a imgbb y retorna la URL pública."""
-    if not IMGBB_API_KEY:
-        return None
+def _get_ig_posts_today() -> int:
+    """Cuenta cuántos posts se publicaron en Instagram hoy."""
     try:
-        import base64
-        with open(image_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        resp = requests.post(
-            "https://api.imgbb.com/1/upload",
-            data={"key": IMGBB_API_KEY, "image": b64},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()["data"]["url"]
-    except Exception as e:
-        logger.error(f"imgbb upload error: {e}")
-        return None
+        with sqlite3.connect(DB_PATH) as conn:
+            today = date.today().isoformat()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE ig_post_id IS NOT NULL AND created_at LIKE ?",
+                (f"{today}%",)
+            ).fetchone()
+            return row[0] if row else 0
+    except Exception:
+        return 0
 
 
 def post_image(image_path: str, caption: str, public_image_url: str = None) -> str | None:
     """
     Publica el flyer en Instagram.
-    public_image_url: URL pública de la imagen (requerido por Meta Graph API).
+    Respeta el límite diario de 15 posts.
     Retorna el post ID o None.
     """
     try:
-        # Si no hay URL pública, intentar con imgbb
-        if not public_image_url:
-            public_image_url = _upload_to_imgbb(image_path)
+        # Verificar límite diario
+        posts_today = _get_ig_posts_today()
+        if posts_today >= IG_DAILY_LIMIT:
+            logger.warning(f"Instagram: limite diario alcanzado ({posts_today}/{IG_DAILY_LIMIT}). Saltando.")
+            return None
 
         if not public_image_url:
-            logger.error("Instagram: no hay URL pública de imagen disponible.")
+            logger.error("Instagram: no hay URL publica de imagen disponible.")
             return None
 
         # Paso 1: crear container
@@ -64,7 +63,20 @@ def post_image(image_path: str, caption: str, public_image_url: str = None) -> s
             logger.error("Instagram: no se obtuvo container_id")
             return None
 
-        # Paso 2: publicar el container
+        # Paso 2: verificar que el container esté listo
+        import time
+        time.sleep(3)
+        status_resp = requests.get(
+            f"{GRAPH_URL}/{container_id}",
+            params={"fields": "status_code", "access_token": config.META_ACCESS_TOKEN},
+            timeout=15,
+        )
+        status = status_resp.json().get("status_code", "")
+        if status == "ERROR":
+            logger.error(f"Instagram: container con error, abortando")
+            return None
+
+        # Paso 3: publicar
         publish_resp = requests.post(
             f"{GRAPH_URL}/{config.IG_ACCOUNT_ID}/media_publish",
             data={
@@ -75,7 +87,7 @@ def post_image(image_path: str, caption: str, public_image_url: str = None) -> s
         )
         publish_resp.raise_for_status()
         post_id = publish_resp.json().get("id")
-        logger.info(f"Instagram: publicado ID={post_id}")
+        logger.info(f"Instagram: publicado ID={post_id} ({posts_today + 1}/{IG_DAILY_LIMIT} hoy)")
         return post_id
     except Exception as e:
         logger.error(f"Instagram post_image error: {e}")

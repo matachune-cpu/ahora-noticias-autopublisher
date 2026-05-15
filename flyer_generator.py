@@ -131,9 +131,9 @@ def _draw_category_badge(draw: ImageDraw.ImageDraw, label: str, font: ImageFont.
         radius=radius,
         fill=RED_COLOR,
     )
-    # Texto blanco centrado
-    text_x = pill_x + padding_x
-    text_y = pill_y + padding_y
+    # Texto blanco centrado (corregido con offset de baseline de PIL)
+    text_x = pill_x + padding_x - bbox[0]
+    text_y = pill_y + (pill_h - text_h) // 2 - bbox[1]
     draw.text((text_x, text_y), label_upper, font=font, fill=WHITE)
 
 
