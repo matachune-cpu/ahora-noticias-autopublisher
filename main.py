@@ -4,10 +4,12 @@ Monitorea RSS de diarios, reescribe con IA y publica en WordPress, Facebook, Ins
 Instagram: cola con scoring de relevancia, publicación en ventanas horarias (6-9h, 12-15h, 21-00h).
 """
 import os
+import re
 import time
 import logging
 import schedule
 import tempfile
+import unicodedata
 from datetime import datetime
 
 import config
@@ -26,6 +28,69 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("main")
+
+
+# ── Deduplicación semántica por similitud de palabras clave ──────────────────
+# Detecta cuando dos artículos de distintas fuentes cubren el mismo tema.
+
+DEDUP_HOURS = 12         # ventana de comparación (horas atrás)
+DEDUP_THRESHOLD = 0.38   # similitud mínima Jaccard para considerar duplicado
+
+_STOPWORDS_ES = {
+    "el", "la", "los", "las", "un", "una", "unos", "unas",
+    "de", "del", "al", "en", "con", "por", "para", "que", "segun",
+    "se", "lo", "le", "les", "su", "sus", "y", "o", "a", "e",
+    "es", "son", "fue", "era", "ha", "han", "hay", "no", "ni",
+    "si", "ya", "mas", "pero", "como", "muy", "bien", "aqui",
+    "cuando", "donde", "quien", "cual", "cuales", "sobre", "ante",
+    "tras", "entre", "durante", "desde", "hasta", "tambien",
+    "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas",
+    "aquel", "todo", "toda", "todos", "todas", "otro", "otra",
+    "mismo", "misma", "cada", "nuevo", "nueva", "gran", "solo",
+    "tras", "junto", "luego", "pese", "tras", "segun", "ante",
+}
+
+
+def _palabras_clave(titulo: str) -> set[str]:
+    """
+    Normaliza un título: quita acentos, pasa a minúsculas, descarta
+    stopwords y palabras cortas. Devuelve el conjunto de términos clave.
+    """
+    # Quitar acentos
+    sin_tildes = unicodedata.normalize("NFD", titulo)
+    sin_tildes = "".join(c for c in sin_tildes if unicodedata.category(c) != "Mn")
+    # Minúsculas y quitar puntuación
+    limpio = re.sub(r"[^\w\s]", " ", sin_tildes.lower())
+    # Palabras significativas: más de 3 chars, no stopword
+    return {p for p in limpio.split() if len(p) > 3 and p not in _STOPWORDS_ES}
+
+
+def _jaccard(titulo_a: str, titulo_b: str) -> float:
+    """Similitud Jaccard entre dos títulos sobre sus palabras clave."""
+    a = _palabras_clave(titulo_a)
+    b = _palabras_clave(titulo_b)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def es_tema_duplicado(
+    nuevo_titulo: str,
+    titulos_recientes: list[str],
+    umbral: float = DEDUP_THRESHOLD,
+) -> tuple[bool, str, float]:
+    """
+    Compara el nuevo título contra los publicados recientemente.
+    Devuelve (es_duplicado, titulo_mas_similar, similitud).
+    """
+    mejor_sim = 0.0
+    mejor_titulo = ""
+    for titulo in titulos_recientes:
+        sim = _jaccard(nuevo_titulo, titulo)
+        if sim > mejor_sim:
+            mejor_sim = sim
+            mejor_titulo = titulo
+    return mejor_sim >= umbral, mejor_titulo, round(mejor_sim, 2)
 
 
 # ── Prioridad geográfica ──────────────────────────────────────────────────────
@@ -55,7 +120,12 @@ def _is_ig_window() -> bool:
 
 # ── Procesamiento de fuentes ──────────────────────────────────────────────────
 
-def process_source(source: dict):
+def process_source(source: dict, titulos_recientes: list[str]):
+    """
+    titulos_recientes: lista compartida entre fuentes del mismo ciclo.
+    Se actualiza en el lugar con cada nota nueva publicada, para que
+    la segunda fuente no repita un tema que la primera ya cubrió.
+    """
     logger.info(f"Procesando fuente: {source['name']}")
     entries = fetch_entries(source, max_items=source.get("max_articles", config.MAX_ARTICLES_PER_RUN))
 
@@ -77,6 +147,21 @@ def process_source(source: dict):
             continue
 
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
+
+        # ── Deduplicación semántica ──────────────────────────────────────────
+        duplicado, titulo_similar, similitud = es_tema_duplicado(
+            rewritten["title"], titulos_recientes
+        )
+        if duplicado:
+            logger.info(
+                f"  ⟳ Tema repetido (sim={similitud}) — saltando:\n"
+                f"    NUEVO:     {rewritten['title'][:70]}\n"
+                f"    YA EXISTE: {titulo_similar[:70]}"
+            )
+            # Marcar URL como vista para no reprocesarla en ciclos futuros
+            database.mark_seen(url, rewritten["title"], source["name"])
+            continue
+
         pending.append({
             "url": url,
             "article": article,
@@ -198,6 +283,10 @@ def process_source(source: dict):
             f"✓ Publicado: WP={wp_post_id} | FB={fb_post_id} | "
             f"IG={'en cola' if ig_encolado else 'omitido'} | WA={wa_sent}"
         )
+        # Agregar título a la lista compartida para que las fuentes
+        # siguientes del mismo ciclo no repitan este tema
+        titulos_recientes.append(rewritten["title"])
+
         processed += 1
         time.sleep(5)
 
@@ -258,10 +347,16 @@ def run_cycle():
     logger.info("=" * 60)
     logger.info(f"Iniciando ciclo: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    # Cargar títulos de las últimas 12 horas para deduplicación.
+    # Esta lista es COMPARTIDA entre todas las fuentes del ciclo:
+    # si Infobae ya publicó el tema X, Página 12 no lo repetirá.
+    titulos_recientes = database.get_recent_titles(hours=DEDUP_HOURS)
+    logger.info(f"Deduplicador cargado: {len(titulos_recientes)} títulos de las últimas {DEDUP_HOURS}h")
+
     # 1. Procesar todas las fuentes (WP + FB + encolar IG si relevante)
     for source in config.NEWS_SOURCES:
         try:
-            process_source(source)
+            process_source(source, titulos_recientes)
         except Exception as e:
             logger.error(f"Error procesando {source['name']}: {e}")
         time.sleep(3)

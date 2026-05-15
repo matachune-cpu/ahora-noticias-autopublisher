@@ -165,6 +165,38 @@ def ig_queue_count_today() -> int:
         return 0
 
 
+def get_recent_titles(hours: int = 12) -> list[str]:
+    """
+    Retorna los títulos de artículos publicados en las últimas N horas.
+    Usado para detectar notas sobre el mismo tema de distintas fuentes.
+    """
+    from datetime import timedelta
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT title FROM articles WHERE published_at > ? AND title IS NOT NULL",
+            (cutoff,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+
+def mark_seen(url: str, title: str, source: str):
+    """
+    Registra una URL como 'vista' (sin publicar) para no reprocesarla.
+    Se usa cuando se detecta que es un tema ya cubierto por otra fuente.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO articles
+                (url_hash, original_url, title, source, published_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (url_hash(url), url, title, source, datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+
+
 def ig_queue_count_pending() -> int:
     """Cuántos artículos esperan en la cola."""
     with sqlite3.connect(DB_PATH) as conn:

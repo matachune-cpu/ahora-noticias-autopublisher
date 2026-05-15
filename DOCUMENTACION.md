@@ -74,7 +74,7 @@ El **Autopublicador de Ahora Noticias** es un sistema de software que:
                                 │
               ┌─────────────────▼──────────────────┐
               │  2. FILTRAR YA PUBLICADAS           │
-              │  • Consulta SQLite por URL          │
+              │  • Consulta SQLite por URL exacta   │
               │  • Si ya existe → saltar            │
               └─────────────────┬──────────────────┘
                                 │
@@ -85,6 +85,18 @@ El **Autopublicador de Ahora Noticias** es un sistema de software que:
               │  • Extrae imagen (og:image primero) │
               └─────────────────┬──────────────────┘
                                 │
+              ┌─────────────────▼──────────────────┐
+              │  3b. DEDUPLICACIÓN SEMÁNTICA        │
+              │  Compara el título reescrito con    │
+              │  los últimas 12h de publicaciones   │
+              │  usando similitud Jaccard sobre     │
+              │  palabras clave (umbral: 38%)       │
+              │  • Mismo tema → marcar URL "vista"  │
+              │    y saltar (no publica nada)       │
+              │  • Funciona ENTRE fuentes: si       │
+              │    Infobae cubrió el tema, Página   │
+              │    12 no lo repite en el mismo ciclo│
+              └─────────────────┬──────────────────┘
               ┌─────────────────▼──────────────────┐
               │  4. INTELIGENCIA ARTIFICIAL         │
               │  Claude reescribe completamente:    │
@@ -233,10 +245,11 @@ Genera imágenes de **1080 × 1350 px** (formato portrait de Instagram) con Pill
 
 Dos tablas principales:
 
-**`articles`** — registro de todo lo publicado
+**`articles`** — registro de todo lo publicado (y temas vistos/descartados)
 ```
-url_hash │ title │ source │ wp_post_id │ fb_post_id │ ig_post_id │ wa_sent │ created_at
+url_hash │ title │ source │ wp_post_id │ fb_post_id │ ig_post_id │ wa_sent │ published_at
 ```
+> Los artículos descartados por deduplicación también quedan aquí (sin IDs de post), para no reprocesarlos en ciclos futuros.
 
 **`ig_queue`** — cola de publicación para Instagram
 ```
@@ -476,6 +489,38 @@ ahora-noticias-autopublisher/
 ---
 
 ## 🔍 Decisiones de diseño destacadas
+
+### ¿Cómo funciona la deduplicación semántica?
+
+El sistema no puede detectar duplicados solo por URL (diferentes diarios tienen URLs diferentes para la misma noticia). Por eso usa **similitud de Jaccard** sobre palabras clave:
+
+1. Al inicio de cada ciclo, carga todos los títulos publicados en las **últimas 12 horas**
+2. Por cada artículo nuevo, extrae sus **palabras clave** (sin artículos, preposiciones ni palabras cortas)
+3. Calcula qué porcentaje de palabras comparten el título nuevo y cada título reciente
+4. Si la superposición supera el **38%** → lo considera el mismo tema y lo descarta
+
+```
+Ejemplo:
+  Infobae publica: "Milei anunció nueva rebaja en retenciones al agro"
+  Palabras clave: {milei, anuncio, nueva, rebaja, retenciones, agro}
+
+  Página 12 cubre: "El gobierno eliminó retenciones para el sector agrario"
+  Palabras clave: {gobierno, elimino, retenciones, sector, agrario}
+
+  Intersección: {retenciones} → 1 palabra
+  Unión: 10 palabras → Jaccard = 0.10 → NO detectado (diferente enfoque)
+
+  Cadena 3 cubre: "Milei bajó retenciones agropecuarias tras presión del campo"
+  Palabras clave: {milei, bajo, retenciones, agropecuarias, presion, campo}
+
+  Intersección con Infobae: {milei, retenciones} → 2 palabras
+  Unión: 10 → Jaccard = 0.20 → NO detectado (límite borderline)
+
+  → El umbral de 0.38 está calibrado para evitar falsos positivos.
+    Para forzar una detección se necesitan 3+ palabras clave comunes.
+```
+
+La lista se actualiza **en tiempo real dentro del ciclo**: si Infobae publica primero el tema A, cuando se procesa Página 12 ese mismo tema ya está en la lista de comparación.
 
 ### ¿Por qué no publicar todo en Instagram inmediatamente?
 
