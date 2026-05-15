@@ -12,7 +12,7 @@ from datetime import datetime
 import config
 import database
 from scraper import fetch_entries, extract_article
-from rewriter import rewrite_article
+from rewriter import rewrite_article, check_watermark
 from flyer_generator import generate_flyer
 from publishers import wordpress, facebook, instagram, whatsapp
 
@@ -49,18 +49,25 @@ def process_source(source: dict):
             logger.warning(f"No se pudo extraer: {url}")
             continue
 
-        # 2. Reescribir con Claude
+        # 2. Reescribir con Claude (incluye categoría)
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
+        categoria = rewritten.get("categoria", "")
 
-        # 3. Subir foto ORIGINAL a WordPress como imagen destacada
+        # 3. Verificar marca de agua en la imagen
+        imagen_limpia = article.image_url
+        if imagen_limpia and check_watermark(imagen_limpia):
+            logger.info(f"Imagen descartada por marca de agua: {imagen_limpia}")
+            imagen_limpia = None  # no usar imagen con watermark
+
+        # 4. Subir foto ORIGINAL a WordPress como imagen destacada
         wp_post_id = None
         wp_post_url = None
         media_id = None
         wp_photo_url = None
 
-        if article.image_url:
+        if imagen_limpia:
             media_id, wp_photo_url = wordpress.upload_image(
-                image_url=article.image_url,
+                image_url=imagen_limpia,
                 filename=f"foto-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
             )
 
@@ -90,9 +97,10 @@ def process_source(source: dict):
             generate_flyer(
                 title=rewritten["title"],
                 source_name=source["name"],
-                article_image_url=article.image_url,
+                article_image_url=imagen_limpia,
                 template_path=config.FLYER_TEMPLATE_PATH,
                 output_path=flyer_path,
+                categoria=categoria,
             )
             # Subir flyer a WP solo para obtener URL pública (sin asignarlo al post)
             _, flyer_public_url = wordpress.upload_image(

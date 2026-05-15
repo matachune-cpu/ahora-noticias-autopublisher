@@ -105,12 +105,45 @@ def _wrap_title(text: str, font: ImageFont.FreeTypeFont, max_w: int, draw: Image
     return lines[:5]  # máximo 5 líneas
 
 
+def _draw_category_badge(draw: ImageDraw.ImageDraw, label: str, font: ImageFont.FreeTypeFont):
+    """Dibuja la etiqueta de categoría estilo píldora roja en el margen superior izquierdo."""
+    if not label:
+        return
+
+    label_upper = label.upper()
+    padding_x = 28
+    padding_y = 14
+    margin = 48     # margen desde el borde de la foto
+
+    bbox = draw.textbbox((0, 0), label_upper, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    pill_w = text_w + padding_x * 2
+    pill_h = text_h + padding_y * 2
+    pill_x = margin
+    pill_y = margin
+    radius = pill_h // 2
+
+    # Fondo rojo redondeado
+    draw.rounded_rectangle(
+        [(pill_x, pill_y), (pill_x + pill_w, pill_y + pill_h)],
+        radius=radius,
+        fill=RED_COLOR,
+    )
+    # Texto blanco centrado
+    text_x = pill_x + padding_x
+    text_y = pill_y + padding_y
+    draw.text((text_x, text_y), label_upper, font=font, fill=WHITE)
+
+
 def generate_flyer(
     title: str,
     source_name: str,
     article_image_url: Optional[str],
     template_path: str,
     output_path: str,
+    categoria: str = "",
 ) -> str:
 
     canvas = Image.new("RGB", FLYER_SIZE, WHITE)
@@ -126,6 +159,11 @@ def generate_flyer(
     # ── 2. LÍNEA ROJA ─────────────────────────────────────────────────
     draw = ImageDraw.Draw(canvas)
     draw.rectangle([(0, PHOTO_HEIGHT), (FLYER_W, PHOTO_HEIGHT + RED_LINE_H)], fill=RED_COLOR)
+
+    # ── 2b. ETIQUETA DE CATEGORÍA (sobre la foto, margen superior izq) ─
+    if categoria:
+        font_badge = _get_font(30)
+        _draw_category_badge(draw, categoria, font_badge)
 
     # ── 3. TÍTULO EN MAYÚSCULAS ───────────────────────────────────────
     font = _get_font(FONT_SIZE)

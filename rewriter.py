@@ -1,10 +1,17 @@
 import anthropic
 import logging
+import base64
+import requests
 from dotenv import dotenv_values
 
 logger = logging.getLogger(__name__)
 
 _client = None
+
+CATEGORIAS_VALIDAS = [
+    "Política", "Economía", "Salud", "Medio Ambiente", "Tecnología",
+    "Sociedad", "Seguridad", "Deportes", "Cultura", "Internacional",
+]
 
 def _get_client():
     global _client
@@ -15,14 +22,50 @@ def _get_client():
     return _client
 
 
-def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
+def check_watermark(image_url: str) -> bool:
     """
-    Returns dict with keys: title, body_html, instagram_caption, whatsapp_text
+    Usa Claude Vision para detectar si una imagen tiene marca de agua.
+    Retorna True si tiene marca de agua, False si está limpia.
     """
     try:
-        import json
+        resp = requests.get(image_url, timeout=10)
+        resp.raise_for_status()
+        img_b64 = base64.standard_b64encode(resp.content).decode("utf-8")
+        ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
 
-        # Pedimos cada campo por separado usando tool use para evitar errores de JSON
+        message = _get_client().messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=10,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": ct, "data": img_b64},
+                    },
+                    {
+                        "type": "text",
+                        "text": "¿Esta imagen tiene marca de agua (watermark) visible de algún medio o agencia? Respondé solo SI o NO.",
+                    },
+                ],
+            }],
+        )
+        answer = message.content[0].text.strip().upper()
+        has_watermark = answer.startswith("SI") or answer.startswith("SÍ")
+        if has_watermark:
+            logger.info(f"Marca de agua detectada en: {image_url}")
+        return has_watermark
+    except Exception as e:
+        logger.warning(f"No se pudo verificar marca de agua: {e}")
+        return False  # si falla la verificación, usar la imagen igual
+
+
+def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
+    """
+    Reescribe el artículo y determina su categoría.
+    Retorna dict con: title, body_html, instagram_caption, whatsapp_text, categoria, etiqueta
+    """
+    try:
         message = _get_client().messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
@@ -32,12 +75,34 @@ def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "titulo": {"type": "string", "description": "Título nuevo, atractivo y original"},
-                        "cuerpo_html": {"type": "string", "description": "Cuerpo del artículo en HTML con párrafos <p>"},
-                        "caption_instagram": {"type": "string", "description": "Caption para Instagram con emojis y hashtags al final"},
-                        "texto_whatsapp": {"type": "string", "description": "Texto corto para WhatsApp, máximo 500 caracteres"},
+                        "titulo": {
+                            "type": "string",
+                            "description": "Título nuevo, atractivo y original"
+                        },
+                        "cuerpo_html": {
+                            "type": "string",
+                            "description": "Cuerpo del artículo en HTML con párrafos <p>"
+                        },
+                        "caption_instagram": {
+                            "type": "string",
+                            "description": "Caption para Instagram con emojis y hashtags al final"
+                        },
+                        "texto_whatsapp": {
+                            "type": "string",
+                            "description": "Texto corto para WhatsApp, máximo 500 caracteres"
+                        },
+                        "categoria": {
+                            "type": "string",
+                            "description": (
+                                "Categoría principal de la noticia. Elegí UNA sola opción: "
+                                "Política, Economía, Salud, Medio Ambiente, Tecnología, Sociedad, "
+                                "Seguridad, Deportes, Cultura. "
+                                "Si la noticia es de otro país (no Argentina) poné el nombre del país en español (ej: Brasil, Chile, EEUU). "
+                                "Si es de una provincia argentina específica, poné el nombre de la provincia (ej: Córdoba, Tucumán, Santiago del Estero)."
+                            )
+                        },
                     },
-                    "required": ["titulo", "cuerpo_html", "caption_instagram", "texto_whatsapp"],
+                    "required": ["titulo", "cuerpo_html", "caption_instagram", "texto_whatsapp", "categoria"],
                 },
             }],
             tool_choice={"type": "tool", "name": "publicar_noticia"},
@@ -49,15 +114,16 @@ TEXTO ORIGINAL:
 {original_text[:4000]}"""}],
         )
 
-        # Extraer resultado del tool use
         for block in message.content:
             if block.type == "tool_use":
                 data = block.input
+                categoria = data.get("categoria", "").strip()
                 return {
                     "title": data.get("titulo", title),
                     "body_html": data.get("cuerpo_html", f"<p>{original_text[:500]}</p>"),
                     "instagram_caption": data.get("caption_instagram", ""),
                     "whatsapp_text": data.get("texto_whatsapp", ""),
+                    "categoria": categoria,
                 }
 
         raise ValueError("No se recibió respuesta del tool")
@@ -69,4 +135,5 @@ TEXTO ORIGINAL:
             "body_html": f"<p>{original_text[:1000]}</p>",
             "instagram_caption": f"{title}\n\n#noticias #argentina",
             "whatsapp_text": f"{title[:400]}",
+            "categoria": "",
         }
