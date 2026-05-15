@@ -1,0 +1,16 @@
+# Credenciales — NUNCA subir al repo
+.env
+
+# Logs locales
+autopublisher.log
+flyer_prueba.jpg
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Temporales
+*.tmp
