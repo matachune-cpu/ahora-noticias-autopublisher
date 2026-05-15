@@ -8,6 +8,7 @@ on:
 jobs:
   publicar:
     runs-on: ubuntu-latest
+    timeout-minutes: 12        # máximo 12 minutos, luego corta solo
     permissions:
       contents: write          # necesario para commitear la base de datos
 
@@ -40,7 +41,7 @@ jobs:
           WA_CHANNEL_ID=${{ secrets.WA_CHANNEL_ID }}
           WA_API_TOKEN=${{ secrets.WA_API_TOKEN }}
           CHECK_INTERVAL_MINUTES=30
-          MAX_ARTICLES_PER_RUN=5
+          MAX_ARTICLES_PER_RUN=3
           FLYER_TEMPLATE_PATH=templates/flyer_base.png
           EOF
 
