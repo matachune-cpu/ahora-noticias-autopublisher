@@ -31,8 +31,7 @@ REGION_PRIORITY = {"Argentina": 0, "Latinoamerica": 1, "Internacional": 2}
 
 
 def _region_sort_key(item):
-    region = item.get("region", "Argentina")
-    return REGION_PRIORITY.get(region, 2)
+    return REGION_PRIORITY.get(item.get("region", "Argentina"), 2)
 
 
 def process_source(source: dict):
@@ -40,7 +39,7 @@ def process_source(source: dict):
     entries = fetch_entries(source, max_items=source.get("max_articles", config.MAX_ARTICLES_PER_RUN))
     processed = 0
 
-    # Pre-filtrar entradas no publicadas y extraer + reescribir para poder ordenar por región
+    # Pre-procesar: extraer + reescribir para ordenar por prioridad geográfica
     pending = []
     for entry in entries:
         url = entry["url"]
@@ -62,11 +61,10 @@ def process_source(source: dict):
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
         pending.append({"url": url, "article": article, "rewritten": rewritten, "region": rewritten.get("region", "Argentina")})
 
-    # Ordenar: Argentina primero, luego Latinoamérica, luego Internacional
+    # Ordenar: Argentina primero, Latinoamérica segundo, Internacional último
     pending.sort(key=_region_sort_key)
     if pending:
-        regions = [p["region"] for p in pending]
-        logger.info(f"  → Orden por región: {regions}")
+        logger.info(f"  → Orden por región: {[p['region'] for p in pending]}")
 
     for item in pending:
         url = item["url"]
