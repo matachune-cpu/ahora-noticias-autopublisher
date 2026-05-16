@@ -30,14 +30,6 @@ NEWS_SOURCES = [
         "scrape_links": False,
         "max_articles": 8,
     },
-    {
-        "name": "Página 12",
-        "rss": None,
-        "url": "https://www.pagina12.com.ar",
-        "scrape_links": True,
-        "article_selector": "a[href*='/2026/']",
-        "max_articles": 8,
-    },
     # ── SANTIAGO DEL ESTERO — siempre incluido ───────────────────────
     {
         "name": "El Liberal",
@@ -46,7 +38,7 @@ NEWS_SOURCES = [
         "scrape_links": True,
         "article_selector": "a[href*='/nota/']",
         "max_articles": 5,
-        "always_include": True,   # nunca se saltea aunque haya pocas novedades
+        "always_include": True,
     },
     # ── COMPLEMENTARIO ──────────────────────────────────────────────
     {
