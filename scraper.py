@@ -88,6 +88,9 @@ def fetch_rss_entries(source: dict, max_items: int = 10) -> list[dict]:
     return fetch_entries(source, max_items)
 
 
+MIN_ARTICLE_CHARS = 400   # texto mínimo para considerar un artículo completo
+
+
 def extract_article(url: str, source_name: str, title: str, summary: str) -> Optional[Article]:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
@@ -101,6 +104,19 @@ def extract_article(url: str, source_name: str, title: str, summary: str) -> Opt
         # Extract main article text
         full_text = _extract_text(soup)
 
+        # Verificar que el artículo tiene contenido real
+        texto_util = (full_text or "").strip()
+        if len(texto_util) < MIN_ARTICLE_CHARS:
+            # Si el texto es muy corto, intentar con el summary
+            if len((summary or "").strip()) >= MIN_ARTICLE_CHARS:
+                texto_util = summary
+            else:
+                logger.warning(
+                    f"Articulo descartado por contenido insuficiente "
+                    f"({len(texto_util)} chars < {MIN_ARTICLE_CHARS}): {url}"
+                )
+                return None
+
         # Extract first article image
         image_url = _extract_image(soup, url)
 
@@ -108,7 +124,7 @@ def extract_article(url: str, source_name: str, title: str, summary: str) -> Opt
             url=url,
             title=title,
             summary=summary,
-            full_text=full_text or summary,
+            full_text=texto_util,
             source_name=source_name,
             image_url=image_url,
         )
