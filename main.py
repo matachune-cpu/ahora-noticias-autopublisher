@@ -33,10 +33,8 @@ logger = logging.getLogger("main")
 # ── Deduplicación semántica por similitud de palabras clave ──────────────────
 # Detecta cuando dos artículos de distintas fuentes cubren el mismo tema.
 
-DEDUP_HOURS = 12              # ventana de comparación (horas atrás)
-DEDUP_THRESHOLD = 0.38        # similitud Jaccard para duplicado (post-rewrite)
-DEDUP_THRESHOLD_PRE = 0.50    # umbral más estricto para pre-filtro (sin gastar API)
-MIN_BODY_CHARS = 300          # mínimo de texto en el cuerpo reescrito para publicar
+DEDUP_HOURS = 12         # ventana de comparación (horas atrás)
+DEDUP_THRESHOLD = 0.38   # similitud mínima Jaccard para considerar duplicado
 
 _STOPWORDS_ES = {
     "el", "la", "los", "las", "un", "una", "unos", "unas",
@@ -95,12 +93,6 @@ def es_tema_duplicado(
     return mejor_sim >= umbral, mejor_titulo, round(mejor_sim, 2)
 
 
-def _cuerpo_valido(body_html: str) -> bool:
-    """Verifica que el cuerpo reescrito tiene contenido real (no es el fallback vacío)."""
-    texto = re.sub(r"<[^>]+>", "", body_html or "").strip()
-    return len(texto) >= MIN_BODY_CHARS
-
-
 # ── Prioridad geográfica ──────────────────────────────────────────────────────
 REGION_PRIORITY = {"Argentina": 0, "Latinoamerica": 1, "Internacional": 2}
 
@@ -149,48 +141,24 @@ def process_source(source: dict, titulos_recientes: list[str]):
 
         logger.info(f"Nueva noticia: {entry['title'][:80]}")
 
-        # ── FILTRO 1: dedup rápido con título original (antes de gastar API) ──
-        dup_pre, titulo_sim_pre, sim_pre = es_tema_duplicado(
-            entry["title"], titulos_recientes, umbral=DEDUP_THRESHOLD_PRE
-        )
-        if dup_pre:
-            logger.info(
-                f"  [PRE-DEDUP] Tema ya cubierto (sim={sim_pre}), saltando sin reescribir:\n"
-                f"    NUEVO:     {entry['title'][:70]}\n"
-                f"    YA EXISTE: {titulo_sim_pre[:70]}"
-            )
-            database.mark_seen(url, entry["title"], source["name"])
-            continue
-
-        # ── FILTRO 2: extraer y verificar contenido suficiente ────────────────
         article = extract_article(url, source["name"], entry["title"], entry["summary"])
         if not article:
-            logger.warning(f"No se pudo extraer o contenido insuficiente: {url}")
-            database.mark_seen(url, entry["title"], source["name"])
+            logger.warning(f"No se pudo extraer: {url}")
             continue
 
-        # ── FILTRO 3: reescribir con Claude ───────────────────────────────────
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
 
-        # ── FILTRO 4: verificar que el cuerpo reescrito tiene contenido real ──
-        if not _cuerpo_valido(rewritten["body_html"]):
-            logger.warning(
-                f"  [CONTENIDO] Cuerpo insuficiente tras reescritura — saltando: "
-                f"{rewritten['title'][:70]}"
-            )
-            database.mark_seen(url, rewritten["title"], source["name"])
-            continue
-
-        # ── FILTRO 5: dedup semántico con título reescrito (más preciso) ──────
+        # ── Deduplicación semántica ──────────────────────────────────────────
         duplicado, titulo_similar, similitud = es_tema_duplicado(
             rewritten["title"], titulos_recientes
         )
         if duplicado:
             logger.info(
-                f"  [POST-DEDUP] Tema repetido (sim={similitud}) — saltando:\n"
+                f"  ⟳ Tema repetido (sim={similitud}) — saltando:\n"
                 f"    NUEVO:     {rewritten['title'][:70]}\n"
                 f"    YA EXISTE: {titulo_similar[:70]}"
             )
+            # Marcar URL como vista para no reprocesarla en ciclos futuros
             database.mark_seen(url, rewritten["title"], source["name"])
             continue
 
@@ -240,11 +208,12 @@ def process_source(source: dict, titulos_recientes: list[str]):
             featured_media_id=media_id,
         )
 
-        # 4. Publicar en Facebook
+        # 4. Publicar en Facebook (con imagen directa para evitar logo genérico)
         fb_post_id = facebook.post_link(
             title=rewritten["title"],
             wp_post_url=wp_post_url or url,
             original_url=url,
+            image_url=imagen_limpia,
         )
 
         # 5. Generar flyer y encolar en Instagram si la nota es lo suficientemente relevante
