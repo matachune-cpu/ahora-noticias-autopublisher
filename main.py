@@ -218,10 +218,22 @@ def process_source(source: dict, titulos_recientes: list[str]):
             database.mark_seen(url, entry["title"], source["name"])
             continue
 
-        # ── FILTRO 4: reescribir con Claude ──────────────────────────────────────
+        # ── FILTRO 4: reescribir con Claude (incluye evaluación de publicabilidad) ─
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
 
-        # ── FILTRO 5: verificar que el cuerpo reescrito tiene contenido real ─────
+        # ── FILTRO 5: gate principal — Claude decidió si el contenido es válido ──
+        # Cubre: texto truncado, paywall, loterías, sin suficiente información, etc.
+        # El fallback del rewriter TAMBIÉN retorna es_publicable=False en caso de error,
+        # así nunca se publica texto crudo del diario original.
+        if not rewritten.get("es_publicable", False):
+            logger.info(
+                f"  [NO PUBLICABLE] Claude rechazó el contenido: "
+                f"{(rewritten.get('title') or entry['title'])[:70]}"
+            )
+            database.mark_seen(url, rewritten.get("title") or entry["title"], source["name"])
+            continue
+
+        # ── FILTRO 6: segunda capa — cuerpo mínimo 300 chars ─────────────────────
         if not _cuerpo_valido(rewritten["body_html"]):
             logger.warning(
                 f"  [CUERPO] Contenido insuficiente tras reescritura — saltando: "
@@ -230,17 +242,16 @@ def process_source(source: dict, titulos_recientes: list[str]):
             database.mark_seen(url, rewritten["title"], source["name"])
             continue
 
-        # ── FILTRO 6: relevancia mínima para publicar en cualquier canal ──────────
-        ig_score_previo = rewritten.get("ig_relevancia", 5)
-        if ig_score_previo < MIN_RELEVANCE_SCORE:
+        # ── FILTRO 7: relevancia mínima para publicar en cualquier canal ──────────
+        if rewritten.get("ig_relevancia", 5) < MIN_RELEVANCE_SCORE:
             logger.info(
-                f"  [RELEVANCIA] Score {ig_score_previo}/10 muy bajo — no se publica: "
+                f"  [RELEVANCIA] Score {rewritten.get('ig_relevancia')}/10 muy bajo — no se publica: "
                 f"{rewritten['title'][:70]}"
             )
             database.mark_seen(url, rewritten["title"], source["name"])
             continue
 
-        # ── FILTRO 7: dedup semántico con título reescrito (más preciso) ─────────
+        # ── FILTRO 8: dedup semántico con título reescrito (más preciso) ─────────
         duplicado, titulo_similar, similitud = es_tema_duplicado(
             rewritten["title"], titulos_recientes
         )
