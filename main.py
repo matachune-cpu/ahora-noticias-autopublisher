@@ -33,8 +33,11 @@ logger = logging.getLogger("main")
 # ── Deduplicación semántica por similitud de palabras clave ──────────────────
 # Detecta cuando dos artículos de distintas fuentes cubren el mismo tema.
 
-DEDUP_HOURS = 12         # ventana de comparación (horas atrás)
-DEDUP_THRESHOLD = 0.38   # similitud mínima Jaccard para considerar duplicado
+DEDUP_HOURS = 12              # ventana de comparación (horas atrás)
+DEDUP_THRESHOLD = 0.38        # similitud Jaccard para duplicado (post-rewrite)
+DEDUP_THRESHOLD_PRE = 0.50    # umbral más estricto para pre-filtro (sin gastar API)
+MIN_BODY_CHARS = 300          # mínimo de texto en el cuerpo reescrito para publicar
+MIN_RELEVANCE_SCORE = 3       # ig_relevancia mínimo para publicar en cualquier canal
 
 _STOPWORDS_ES = {
     "el", "la", "los", "las", "un", "una", "unos", "unas",
@@ -93,6 +96,53 @@ def es_tema_duplicado(
     return mejor_sim >= umbral, mejor_titulo, round(mejor_sim, 2)
 
 
+def _cuerpo_valido(body_html: str) -> bool:
+    """Verifica que el cuerpo reescrito tiene contenido real (no es el fallback vacío)."""
+    texto = re.sub(r"<[^>]+>", "", body_html or "").strip()
+    return len(texto) >= MIN_BODY_CHARS
+
+
+# ── Filtro de contenido irrelevante por título o URL ─────────────────────────
+# Descarta noticias que no tienen valor para una audiencia argentina
+# antes de gastar créditos de API en ellas.
+
+_TITULO_SPAM = [
+    r"\bgana\s*gato\b",           # lotería mexicana
+    r"\bmelate\b",                 # lotería mexicana
+    r"\btris\b",                   # lotería mexicana
+    r"\bpoblanito\b",
+    r"n[uú]meros?\s+ganadores?",   # resultados de sorteos
+    r"resultados?\s+(del?|de\s+la)\s+sorteo",
+    r"\bboleto\s+ganador\b",
+]
+
+# Patrones de URL que indican contenido de otro país en Infobae
+_INFOBAE_URL_SKIP = [
+    r"infobae\.com/america/mexico/",
+    r"infobae\.com/america/colombia/",
+    r"infobae\.com/america/venezuela/",
+    r"infobae\.com/america/peru/",
+    r"infobae\.com/america/brasil/",
+    r"infobae\.com/america/chile/",
+]
+
+
+def _es_irrelevante(titulo: str, url: str, source_name: str) -> bool:
+    """
+    Retorna True si el artículo es claramente irrelevante para la audiencia argentina
+    (loterías extranjeras, resultados de sorteos, contenido de otros países, etc.).
+    """
+    titulo_lower = titulo.lower()
+    for patron in _TITULO_SPAM:
+        if re.search(patron, titulo_lower):
+            return True
+    if source_name == "Infobae":
+        for patron in _INFOBAE_URL_SKIP:
+            if re.search(patron, url):
+                return True
+    return False
+
+
 # ── Prioridad geográfica ──────────────────────────────────────────────────────
 REGION_PRIORITY = {"Argentina": 0, "Latinoamerica": 1, "Internacional": 2}
 
@@ -129,7 +179,8 @@ def process_source(source: dict, titulos_recientes: list[str]):
     logger.info(f"Procesando fuente: {source['name']}")
     entries = fetch_entries(source, max_items=source.get("max_articles", config.MAX_ARTICLES_PER_RUN))
 
-    # Pre-procesar: extraer + reescribir para poder ordenar por región
+    # Pre-procesar con pipeline de filtros. Solo los artículos que pasan todos
+    # los filtros se agregan a `pending` para ser publicados.
     pending = []
     for entry in entries:
         url = entry["url"]
@@ -141,24 +192,64 @@ def process_source(source: dict, titulos_recientes: list[str]):
 
         logger.info(f"Nueva noticia: {entry['title'][:80]}")
 
-        article = extract_article(url, source["name"], entry["title"], entry["summary"])
-        if not article:
-            logger.warning(f"No se pudo extraer: {url}")
+        # ── FILTRO 1: contenido irrelevante por título/URL (sin costo de API) ──
+        if _es_irrelevante(entry["title"], url, source["name"]):
+            logger.info(f"  [IRRELEVANTE] Descartado por título/URL: {entry['title'][:70]}")
+            database.mark_seen(url, entry["title"], source["name"])
             continue
 
+        # ── FILTRO 2: dedup rápido con título original (sin costo de API) ──────
+        dup_pre, titulo_sim_pre, sim_pre = es_tema_duplicado(
+            entry["title"], titulos_recientes, umbral=DEDUP_THRESHOLD_PRE
+        )
+        if dup_pre:
+            logger.info(
+                f"  [PRE-DEDUP] Tema ya cubierto (sim={sim_pre}) — saltando sin reescribir:\n"
+                f"    NUEVO:     {entry['title'][:70]}\n"
+                f"    YA EXISTE: {titulo_sim_pre[:70]}"
+            )
+            database.mark_seen(url, entry["title"], source["name"])
+            continue
+
+        # ── FILTRO 3: extraer artículo y verificar contenido suficiente ─────────
+        article = extract_article(url, source["name"], entry["title"], entry["summary"])
+        if not article:
+            logger.warning(f"  [CONTENIDO] Insuficiente o error al extraer: {url}")
+            database.mark_seen(url, entry["title"], source["name"])
+            continue
+
+        # ── FILTRO 4: reescribir con Claude ──────────────────────────────────────
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
 
-        # ── Deduplicación semántica ──────────────────────────────────────────
+        # ── FILTRO 5: verificar que el cuerpo reescrito tiene contenido real ─────
+        if not _cuerpo_valido(rewritten["body_html"]):
+            logger.warning(
+                f"  [CUERPO] Contenido insuficiente tras reescritura — saltando: "
+                f"{rewritten['title'][:70]}"
+            )
+            database.mark_seen(url, rewritten["title"], source["name"])
+            continue
+
+        # ── FILTRO 6: relevancia mínima para publicar en cualquier canal ──────────
+        ig_score_previo = rewritten.get("ig_relevancia", 5)
+        if ig_score_previo < MIN_RELEVANCE_SCORE:
+            logger.info(
+                f"  [RELEVANCIA] Score {ig_score_previo}/10 muy bajo — no se publica: "
+                f"{rewritten['title'][:70]}"
+            )
+            database.mark_seen(url, rewritten["title"], source["name"])
+            continue
+
+        # ── FILTRO 7: dedup semántico con título reescrito (más preciso) ─────────
         duplicado, titulo_similar, similitud = es_tema_duplicado(
             rewritten["title"], titulos_recientes
         )
         if duplicado:
             logger.info(
-                f"  ⟳ Tema repetido (sim={similitud}) — saltando:\n"
+                f"  [POST-DEDUP] Tema repetido (sim={similitud}) — saltando:\n"
                 f"    NUEVO:     {rewritten['title'][:70]}\n"
                 f"    YA EXISTE: {titulo_similar[:70]}"
             )
-            # Marcar URL como vista para no reprocesarla en ciclos futuros
             database.mark_seen(url, rewritten["title"], source["name"])
             continue
 
@@ -192,9 +283,10 @@ def process_source(source: dict, titulos_recientes: list[str]):
         wp_post_id = None
         wp_post_url = None
         media_id = None
+        media_url = None   # URL pública de la imagen en WordPress
 
         if imagen_limpia:
-            media_id, _ = wordpress.upload_image(
+            media_id, media_url = wordpress.upload_image(
                 image_url=imagen_limpia,
                 filename=f"foto-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
             )
@@ -208,12 +300,16 @@ def process_source(source: dict, titulos_recientes: list[str]):
             featured_media_id=media_id,
         )
 
-        # 4. Publicar en Facebook (con imagen directa para evitar logo genérico)
+        # 4. Publicar en Facebook
+        # Usamos media_url (imagen ya subida a WP) para garantizar que Facebook
+        # siempre muestre la imagen correcta. Evita que Infobae/otros bloqueen
+        # el hotlink y evita el logo genérico del sitio.
+        fb_image = media_url or imagen_limpia
         fb_post_id = facebook.post_link(
             title=rewritten["title"],
             wp_post_url=wp_post_url or url,
             original_url=url,
-            image_url=imagen_limpia,
+            image_url=fb_image,
         )
 
         # 5. Generar flyer y encolar en Instagram si la nota es lo suficientemente relevante

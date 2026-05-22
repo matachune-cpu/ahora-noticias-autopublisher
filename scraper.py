@@ -133,6 +133,17 @@ def extract_article(url: str, source_name: str, title: str, summary: str) -> Opt
         return None
 
 
+def _clean_p(p) -> str:
+    """
+    Extrae el texto de un <p> con separadores de espacio entre elementos inline
+    (evita que <strong>texto</strong>siguiente quede como 'textosiguiente').
+    Normaliza espacios múltiples que puede dejar BeautifulSoup.
+    """
+    import re
+    raw = p.get_text(separator=" ", strip=True)
+    return re.sub(r" {2,}", " ", raw).strip()
+
+
 def _extract_text(soup: BeautifulSoup) -> str:
     # Try common article containers in order of specificity
     selectors = [
@@ -147,13 +158,14 @@ def _extract_text(soup: BeautifulSoup) -> str:
         container = soup.select_one(selector)
         if container:
             paragraphs = container.find_all("p")
-            text = "\n".join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 40)
+            parts = [_clean_p(p) for p in paragraphs if len(_clean_p(p)) > 40]
+            text = "\n".join(parts)
             if len(text) > 200:
                 return text
 
     # Fallback: all paragraphs
     paragraphs = soup.find_all("p")
-    return "\n".join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 40)
+    return "\n".join(_clean_p(p) for p in paragraphs if len(_clean_p(p)) > 40)
 
 
 def _extract_image(soup: BeautifulSoup, base_url: str) -> Optional[str]:
