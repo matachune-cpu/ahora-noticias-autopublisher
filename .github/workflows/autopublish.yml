@@ -1,9 +1,7 @@
 name: Ahora Noticias - Autopublicador
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'   # cada 30 minutos, las 24 horas
-  workflow_dispatch:           # también se puede ejecutar manualmente
+  workflow_dispatch:           # solo ejecución manual — automatización pausada
 
 jobs:
   publicar:
