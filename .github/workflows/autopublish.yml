@@ -1,7 +1,9 @@
 name: Ahora Noticias - Autopublicador
 
 on:
-  workflow_dispatch:           # solo ejecución manual — automatización pausada
+  schedule:
+    - cron: '*/30 * * * *'   # cada 30 minutos, las 24 horas
+  workflow_dispatch:           # también se puede ejecutar manualmente
 
 jobs:
   publicar:
@@ -31,7 +33,7 @@ jobs:
       - name: Crear archivo .env desde secretos
         run: |
           cat > .env << EOF
-          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
           WP_URL=${{ secrets.WP_URL }}
           WP_USERNAME=${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
