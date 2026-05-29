@@ -22,7 +22,7 @@ def _get_client():
     return _client
 
 
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 
 # Resultado vacío que main.py interpreta como "no publicar"
 _RESULTADO_NO_PUBLICABLE = {
