@@ -1,7 +1,9 @@
 name: Ahora Noticias - Autopublicador
 
 on:
-  workflow_dispatch:           # solo manual — pausado para evitar duplicados con terminal local
+  schedule:
+    - cron: '*/30 * * * *'   # cada 30 minutos
+  workflow_dispatch:           # también se puede ejecutar manualmente
 
 jobs:
   publicar:
