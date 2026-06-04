@@ -103,7 +103,7 @@ def _fetch_labanda_api(source: dict, max_items: int) -> list[dict]:
 def _fetch_santiago_ciudad(source: dict, max_items: int) -> list[dict]:
     """
     Scrapea el listado de noticias de santiagociudad.gov.ar.
-    Extrae IDs y slugs para construir las URLs de cada artículo.
+    Los títulos están en elementos h6 dentro de cada link de artículo.
     """
     try:
         resp = requests.get(source["url"], headers=HEADERS, timeout=15)
@@ -111,31 +111,43 @@ def _fetch_santiago_ciudad(source: dict, max_items: int) -> list[dict]:
         resp.encoding = resp.apparent_encoding or "utf-8"
         soup = BeautifulSoup(resp.text, "lxml")
 
-        links = soup.select("a[href*='/noticias/']")
+        # Los h6 son los títulos reales; cada uno está dentro de un
+        # contenedor que también tiene un link <a href="/noticias/ID-slug">
+        h6_tags = soup.find_all("h6")
         seen = set()
         entries = []
-        for link in links:
-            href = link.get("href", "")
+
+        for h6 in h6_tags:
+            title = h6.get_text(strip=True)
+            if len(title) < 15:
+                continue
+            # Descarta fechas sueltas
+            if re.match(r"^\d{1,2}[-/]\d{1,2}[-/]\d{4}$", title):
+                continue
+
+            # Buscar el link con /noticias/ID en el mismo contenedor padre
+            parent = h6.find_parent(["div", "article", "li", "section"])
+            href = None
+            if parent:
+                for a in parent.find_all("a", href=True):
+                    if re.search(r"/noticias/\d+", a["href"]):
+                        href = a["href"]
+                        break
+            # Fallback: buscar en hermanos
+            if not href:
+                for sib in h6.find_all_next("a", limit=3):
+                    if re.search(r"/noticias/\d+", sib.get("href", "")):
+                        href = sib["href"]
+                        break
+
             if not href:
                 continue
             if not href.startswith("http"):
                 href = "https://www.santiagociudad.gov.ar" + href
-            if href in seen or "/noticias/" not in href:
-                continue
-            # Solo links de artículos individuales (tienen ID numérico)
-            if not re.search(r"/noticias/\d+", href):
+            if href in seen:
                 continue
             seen.add(href)
-            title = link.get_text(strip=True)
-            if len(title) < 10:
-                # Buscar título en elemento padre
-                parent = link.find_parent(["article", "div", "li"])
-                if parent:
-                    h = parent.find(["h1", "h2", "h3", "h4", "h5", "h6"])
-                    if h:
-                        title = h.get_text(strip=True)
-            if len(title) < 10:
-                continue
+
             entries.append({"url": href, "title": title, "summary": ""})
             if len(entries) >= max_items:
                 break
