@@ -127,6 +127,19 @@ _INFOBAE_URL_SKIP = [
 MAX_NO_ARGENTINA_POR_CICLO = 2
 
 
+# Patrones que indican que Cadena 3 está hablando de sí misma
+# (sus programas, conductores, eventos propios, publicidades internas)
+_CADENA3_AUTOPROMOCIONAL = [
+    r"\bcadena\s*3\b",            # menciona "Cadena 3" como protagonista
+    r"\bel\s+show\s+del\s+mediod[ií]a\b",
+    r"\bv[ií]a\s+pa[ií]s\b",
+    r"\bla\s+ma[ñn]ana\s+de\s+cadena\b",
+    r"\bprimera\s+tarde\b",
+    r"\bariel\s+rod[rí]guez\b",   # conductor emblema de C3
+    r"\bnuestro\s+(programa|equipo|conductor)\b",
+]
+
+
 def _es_irrelevante(titulo: str, url: str, source_name: str) -> bool:
     """
     Retorna True si el artículo es claramente irrelevante para la audiencia argentina.
@@ -138,6 +151,11 @@ def _es_irrelevante(titulo: str, url: str, source_name: str) -> bool:
     if source_name == "Infobae":
         for patron in _INFOBAE_URL_SKIP:
             if re.search(patron, url):
+                return True
+    if source_name == "Cadena 3":
+        for patron in _CADENA3_AUTOPROMOCIONAL:
+            if re.search(patron, titulo_lower):
+                logger.debug(f"  [CADENA3] Contenido propio descartado: {titulo[:60]}")
                 return True
     return False
 
