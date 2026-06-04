@@ -116,21 +116,20 @@ _TITULO_SPAM = [
     r"\bboleto\s+ganador\b",
 ]
 
-# Patrones de URL que indican contenido de otro país en Infobae
+# Infobae /america/ cubre toda Latinoamérica — bloqueamos todo ese subdominio.
+# Solo nos interesan las secciones argentinas de Infobae.
 _INFOBAE_URL_SKIP = [
-    r"infobae\.com/america/mexico/",
-    r"infobae\.com/america/colombia/",
-    r"infobae\.com/america/venezuela/",
-    r"infobae\.com/america/peru/",
-    r"infobae\.com/america/brasil/",
-    r"infobae\.com/america/chile/",
+    r"infobae\.com/america/",   # Toda la cobertura latinoamericana de Infobae
+    r"infobae\.com/en/",        # Versión en inglés
 ]
+
+# Límite de artículos NO argentinos por ciclo completo (todas las fuentes)
+MAX_NO_ARGENTINA_POR_CICLO = 2
 
 
 def _es_irrelevante(titulo: str, url: str, source_name: str) -> bool:
     """
-    Retorna True si el artículo es claramente irrelevante para la audiencia argentina
-    (loterías extranjeras, resultados de sorteos, contenido de otros países, etc.).
+    Retorna True si el artículo es claramente irrelevante para la audiencia argentina.
     """
     titulo_lower = titulo.lower()
     for patron in _TITULO_SPAM:
@@ -170,7 +169,7 @@ def _is_ig_window() -> bool:
 
 # ── Procesamiento de fuentes ──────────────────────────────────────────────────
 
-def process_source(source: dict, titulos_recientes: list[str]):
+def process_source(source: dict, titulos_recientes: list[str], no_argentina_count: list = None):
     """
     titulos_recientes: lista compartida entre fuentes del mismo ciclo.
     Se actualiza en el lugar con cada nota nueva publicada, para que
@@ -269,11 +268,23 @@ def process_source(source: dict, titulos_recientes: list[str]):
             database.mark_seen(url, rewritten["title"], source["name"])
             continue
 
+        region = rewritten.get("region", "Argentina")
+
+        # ── FILTRO: límite de artículos no-argentinos por ciclo ───────────────
+        if region != "Argentina" and no_argentina_count is not None:
+            if no_argentina_count[0] >= MAX_NO_ARGENTINA_POR_CICLO:
+                logger.info(
+                    f"  [CUOTA] Límite no-Argentina alcanzado ({MAX_NO_ARGENTINA_POR_CICLO}) "
+                    f"— saltando: {rewritten['title'][:60]}"
+                )
+                database.mark_seen(url, rewritten["title"], source["name"])
+                continue
+
         pending.append({
             "url": url,
             "article": article,
             "rewritten": rewritten,
-            "region": rewritten.get("region", "Argentina"),
+            "region": region,
         })
 
     # Ordenar por región: Argentina > Latinoamérica > Internacional
@@ -396,9 +407,12 @@ def process_source(source: dict, titulos_recientes: list[str]):
             f"✓ Publicado: WP={wp_post_id} | FB={fb_post_id} | "
             f"IG={'en cola' if ig_encolado else 'omitido'} | WA={wa_sent}"
         )
-        # Agregar título a la lista compartida para que las fuentes
-        # siguientes del mismo ciclo no repitan este tema
+        # Agregar título a lista compartida para dedup entre fuentes
         titulos_recientes.append(rewritten["title"])
+
+        # Contar artículos no-argentinos publicados en este ciclo
+        if rewritten.get("region", "Argentina") != "Argentina" and no_argentina_count is not None:
+            no_argentina_count[0] += 1
 
         processed += 1
         time.sleep(5)
@@ -460,19 +474,23 @@ def run_cycle():
     logger.info("=" * 60)
     logger.info(f"Iniciando ciclo: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # Cargar títulos de las últimas 12 horas para deduplicación.
-    # Esta lista es COMPARTIDA entre todas las fuentes del ciclo:
-    # si Infobae ya publicó el tema X, Página 12 no lo repetirá.
     titulos_recientes = database.get_recent_titles(hours=DEDUP_HOURS)
     logger.info(f"Deduplicador cargado: {len(titulos_recientes)} títulos de las últimas {DEDUP_HOURS}h")
+
+    # Contador compartido de artículos NO argentinos publicados en este ciclo.
+    # Las fuentes municipales y El Liberal son siempre argentinas.
+    # Infobae y Cadena 3 pueden traer contenido internacional.
+    no_argentina_count = [0]   # lista para mutabilidad en process_source
 
     # 1. Procesar todas las fuentes (WP + FB + encolar IG si relevante)
     for source in config.NEWS_SOURCES:
         try:
-            process_source(source, titulos_recientes)
+            process_source(source, titulos_recientes, no_argentina_count)
         except Exception as e:
             logger.error(f"Error procesando {source['name']}: {e}")
         time.sleep(3)
+
+    logger.info(f"Ciclo: {no_argentina_count[0]} artículos no-argentinos publicados (máx {MAX_NO_ARGENTINA_POR_CICLO})")
 
     # 2. Publicar desde cola de Instagram si es horario activo
     publish_ig_queue()
