@@ -1,0 +1,70 @@
+name: Ahora Noticias - Inyección Manual de Artículo
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL del artículo a publicar'
+        required: false
+        default: 'https://www.pagina12.com.ar/2026/05/26/no-importara-que-estudien-los-chicos/'
+      source:
+        description: 'Nombre de la fuente periodística'
+        required: false
+        default: 'Página 12'
+
+jobs:
+  inyectar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          META_ACCESS_TOKEN=${{ secrets.META_ACCESS_TOKEN }}
+          FB_PAGE_ID=${{ secrets.FB_PAGE_ID }}
+          IG_ACCOUNT_ID=${{ secrets.IG_ACCOUNT_ID }}
+          WA_PHONE_NUMBER_ID=${{ secrets.WA_PHONE_NUMBER_ID }}
+          WA_CHANNEL_ID=${{ secrets.WA_CHANNEL_ID }}
+          WA_API_TOKEN=${{ secrets.WA_API_TOKEN }}
+          CHECK_INTERVAL_MINUTES=30
+          MAX_ARTICLES_PER_RUN=3
+          FLYER_TEMPLATE_PATH=templates/flyer_base.png
+          EOF
+
+      - name: Inyectar artículo manual
+        run: |
+          python inject_article.py \
+            "${{ github.event.inputs.url }}" \
+            --source "${{ github.event.inputs.source }}"
+
+      - name: Guardar base de datos en el repo
+        run: |
+          git config user.name "Ahora Noticias Bot"
+          git config user.email "bot@ahoranoticias.com.ar"
+          git add published_articles.db
+          git diff --staged --quiet || git commit -m "DB: inyección manual [${{ github.event.inputs.url }}] [skip ci]"
+          git push
