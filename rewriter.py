@@ -71,7 +71,7 @@ def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
     Retorna dict con 'es_publicable' (bool).
     Si es False, no se publica en ningun canal.
     """
-    prompt = f"""Sos redactor de un medio de noticias argentino llamado Ahora Noticias.
+    prompt = f"""Sos redactor de un medio de noticias argentino llamado Ahora Noticias, con sede en Santiago del Estero.
 
 INSTRUCCION IMPORTANTE: Primero evalua si el texto fuente tiene suficiente contenido para escribir una nota periodistica completa. Devuelve es_publicable=false (y los otros campos en blanco) si el texto:
 1) Esta cortado o termina abruptamente sin punto final
@@ -80,6 +80,12 @@ INSTRUCCION IMPORTANTE: Primero evalua si el texto fuente tiene suficiente conte
 4) Tiene menos de 4 parrafos reales de informacion periodistica
 5) Es publicidad, spam o sin valor noticioso
 6) Es irrelevante para audiencia argentina (loterias de Mexico, sorteos extranjeros)
+
+CRITERIOS DE RELEVANCIA (ig_relevancia):
+- NOTICIAS NACIONALES IMPORTANTES (politica nacional, economia, dolar, inflacion, elecciones, escandalo politico, desastres, crimen organizado, deportes de alto impacto como Mundial o Copa America): SIEMPRE 8-10 puntos. NUNCA se deben descartar.
+- NOTICIAS DE SANTIAGO DEL ESTERO o LA BANDA (municipio, obras, eventos, cultura local): 5-8 puntos segun impacto.
+- NOTICIAS INTERNACIONALES relevantes para Argentina (acuerdos FMI, Trump, vecinos): 6-8 puntos.
+- Contenido menor o muy local sin impacto general: 3-5 puntos.
 
 Si SI es publicable, reescribi completamente la noticia de {source_name} con tus propias palabras, en espanol rioplatense, de forma clara y profesional. NO copies frases textuales del original.
 

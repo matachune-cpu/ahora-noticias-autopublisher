@@ -22,15 +22,15 @@ MAX_ARTICLES_PER_RUN = int(os.getenv("MAX_ARTICLES_PER_RUN", "5"))
 FLYER_TEMPLATE_PATH = os.getenv("FLYER_TEMPLATE_PATH", "templates/flyer_base.png")
 
 NEWS_SOURCES = [
-    # ── PRIORIDAD ALTA ──────────────────────────────────────────────
+    # ── NACIONAL — agenda argentina prioritaria ──────────────────────
     {
         "name": "Infobae",
         "rss": "https://www.infobae.com/arc/outboundfeeds/rss/",
         "url": "https://www.infobae.com",
         "scrape_links": False,
-        "max_articles": 8,
+        "max_articles": 6,
     },
-    # ── SANTIAGO DEL ESTERO — siempre incluido ───────────────────────
+    # ── SANTIAGO DEL ESTERO — El Liberal ────────────────────────────
     {
         "name": "El Liberal",
         "rss": None,
@@ -40,13 +40,29 @@ NEWS_SOURCES = [
         "max_articles": 5,
         "always_include": True,
     },
-    # ── COMPLEMENTARIO ──────────────────────────────────────────────
+    # ── MUNICIPIO SANTIAGO CAPITAL — anunciante oficial ──────────────
+    {
+        "name": "Santiago Ciudad",
+        "santiago_ciudad": True,
+        "url": "https://www.santiagociudad.gov.ar/noticias",
+        "max_articles": 3,
+        "always_include": True,
+    },
+    # ── MUNICIPIO LA BANDA — anunciante oficial ──────────────────────
+    {
+        "name": "Municipalidad La Banda",
+        "labanda_api": "https://labanda.gob.ar/api/prensa/find-all-news",
+        "url": "https://labanda.gob.ar/todas-las-noticias/",
+        "max_articles": 3,
+        "always_include": True,
+    },
+    # ── COMPLEMENTARIO NACIONAL ──────────────────────────────────────
     {
         "name": "Cadena 3",
         "rss": None,
         "url": "https://www.cadena3.com",
         "scrape_links": True,
         "article_selector": "a[href*='/noticia/']",
-        "max_articles": 4,
+        "max_articles": 3,
     },
 ]

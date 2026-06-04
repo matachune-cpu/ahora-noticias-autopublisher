@@ -212,7 +212,12 @@ def process_source(source: dict, titulos_recientes: list[str]):
             continue
 
         # ── FILTRO 3: extraer artículo y verificar contenido suficiente ─────────
-        article = extract_article(url, source["name"], entry["title"], entry["summary"])
+        # Si la fuente ya provee full_text (ej: La Banda API), lo pasa directo
+        article = extract_article(
+            url, source["name"], entry["title"], entry["summary"],
+            full_text=entry.get("full_text"),
+            image_url=entry.get("image_url"),
+        )
         if not article:
             logger.warning(f"  [CONTENIDO] Insuficiente o error al extraer: {url}")
             database.mark_seen(url, entry["title"], source["name"])
