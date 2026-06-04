@@ -5,6 +5,10 @@ on:
     - cron: '*/30 * * * *'   # cada 30 minutos
   workflow_dispatch:           # también se puede ejecutar manualmente
 
+concurrency:
+  group: autopublisher          # solo un ciclo a la vez, nunca en paralelo
+  cancel-in-progress: false     # el ciclo en curso termina, el siguiente espera
+
 jobs:
   publicar:
     runs-on: ubuntu-latest
