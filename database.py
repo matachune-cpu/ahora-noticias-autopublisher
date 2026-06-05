@@ -37,7 +37,12 @@ def init_db():
                 ig_post_id TEXT
             )
         """)
-        conn.commit()
+        # Migración: agregar columna source a ig_queue si no existe
+        try:
+            conn.execute("ALTER TABLE ig_queue ADD COLUMN source TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            pass  # La columna ya existe
 
 
 def url_hash(url: str) -> str:
@@ -85,15 +90,20 @@ def mark_published(
 
 # ── Cola de Instagram ─────────────────────────────────────────────────────────
 
+# Fuentes municipales que siempre deben tener presencia en Instagram
+IG_MUNICIPAL_SOURCES = {"Santiago Ciudad", "Municipalidad La Banda"}
+
+
 def ig_queue_add(
     url: str,
     title: str,
     ig_caption: str,
     flyer_public_url: str,
     relevance_score: int,
+    source: str = "",
 ) -> bool:
     """
-    Agrega un artículo a la cola de Instagram.
+    Agrega un artículo a la cola de Instagram con su fuente de origen.
     Retorna True si se insertó, False si ya estaba.
     """
     try:
@@ -101,10 +111,12 @@ def ig_queue_add(
             conn.execute(
                 """
                 INSERT OR IGNORE INTO ig_queue
-                    (url_hash, original_url, title, ig_caption, flyer_public_url, relevance_score)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (url_hash, original_url, title, ig_caption,
+                     flyer_public_url, relevance_score, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (url_hash(url), url, title, ig_caption, flyer_public_url, relevance_score),
+                (url_hash(url), url, title, ig_caption,
+                 flyer_public_url, relevance_score, source),
             )
             conn.commit()
             return conn.total_changes > 0
@@ -114,22 +126,56 @@ def ig_queue_add(
 
 def ig_queue_get_pending(limit: int = 3) -> list[dict]:
     """
-    Devuelve los próximos artículos pendientes de publicar en Instagram,
-    ordenados por relevancia (mayor primero) y luego por fecha de cola (FIFO).
-    Solo los que no tienen posted_at.
+    Devuelve los próximos artículos pendientes de publicar en Instagram
+    con lógica de intercalado:
+    - Garantiza que los posts municipales (Santiago Ciudad / La Banda)
+      no salgan consecutivos entre sí ni con otros municipales.
+    - Si el último publicado fue municipal, el siguiente es general y viceversa.
+    - Siempre que haya posts municipales pendientes, uno entra en la selección.
     """
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
+
+        # Determinar qué tipo fue el último publicado
+        last = conn.execute(
+            "SELECT source FROM ig_queue WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 1"
+        ).fetchone()
+        last_was_municipal = bool(last and last["source"] in IG_MUNICIPAL_SOURCES)
+
+        # Obtener todos los pendientes
+        all_pending = [dict(r) for r in conn.execute(
             """
             SELECT * FROM ig_queue
             WHERE posted_at IS NULL AND flyer_public_url IS NOT NULL
             ORDER BY relevance_score DESC, queued_at ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+            """
+        ).fetchall()]
+
+    municipales = [p for p in all_pending if p.get("source", "") in IG_MUNICIPAL_SOURCES]
+    generales   = [p for p in all_pending if p.get("source", "") not in IG_MUNICIPAL_SOURCES]
+
+    # Construir lista intercalada
+    result = []
+    # Si el último fue municipal, el primero de esta ronda debe ser general
+    if last_was_municipal:
+        order = [generales, municipales]
+    else:
+        # Preferimos empezar con municipal si hay disponibles
+        order = [municipales, generales] if municipales else [generales, municipales]
+
+    i = 0
+    while len(result) < limit:
+        primary = order[i % 2]
+        secondary = order[(i + 1) % 2]
+        if primary:
+            result.append(primary.pop(0))
+        elif secondary:
+            result.append(secondary.pop(0))
+        else:
+            break
+        i += 1
+
+    return result
 
 
 def ig_queue_mark_posted(url: str, ig_post_id: str):

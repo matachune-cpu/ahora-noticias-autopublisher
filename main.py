@@ -176,7 +176,9 @@ IG_POSTING_WINDOWS = [
 ]
 IG_MAX_PER_RUN = 2      # máximo posts por ciclo de 30 min dentro de una ventana
 IG_DAILY_LIMIT = 50     # límite real de la API de Meta
-IG_RELEVANCE_MIN = 7    # puntaje mínimo para entrar a la cola
+IG_RELEVANCE_MIN = 7    # puntaje mínimo para fuentes generales
+IG_RELEVANCE_MIN_MUNICIPAL = 4   # umbral más bajo para municipios anunciantes
+IG_MUNICIPAL_SOURCES = {"Santiago Ciudad", "Municipalidad La Banda"}
 
 
 def _is_ig_window() -> bool:
@@ -357,12 +359,15 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
             image_url=fb_image,
         )
 
-        # 5. Generar flyer y encolar en Instagram si la nota es lo suficientemente relevante
+        # 5. Generar flyer y encolar en Instagram
+        # Municipios anunciantes tienen umbral más bajo para garantizar presencia diaria
         flyer_public_url = None
         flyer_path = None
         ig_encolado = False
+        es_municipal = source["name"] in IG_MUNICIPAL_SOURCES
+        ig_min = IG_RELEVANCE_MIN_MUNICIPAL if es_municipal else IG_RELEVANCE_MIN
 
-        if ig_score >= IG_RELEVANCE_MIN:
+        if ig_score >= ig_min:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 flyer_path = tmp.name
             try:
@@ -386,6 +391,7 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
                     ig_caption=rewritten["instagram_caption"],
                     flyer_public_url=flyer_public_url,
                     relevance_score=ig_score,
+                    source=source["name"],
                 )
                 ig_encolado = added
                 logger.info(
