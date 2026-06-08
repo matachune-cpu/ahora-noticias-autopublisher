@@ -6,6 +6,7 @@ import config
 logger = logging.getLogger(__name__)
 
 GRAPH_URL = "https://graph.facebook.com/v19.0"
+WP_DOMAIN = "ahoranoticias.com.ar"   # dominio propio — NUNCA linkear a otro
 
 
 def post_link(
@@ -15,21 +16,29 @@ def post_link(
     image_url: str = None,
 ) -> str | None:
     """
-    Publica en la página de Facebook.
+    Publica en Facebook siempre linkeando a ahoranoticias.com.ar.
 
-    Si hay imagen disponible:
-      1) Sube la foto como no-publicada  →  obtiene photo_id
-      2) Crea post en el FEED adjuntando esa foto  →  aparece en el timeline
-         con la imagen real, sin depender del scraping de og:image de WordPress.
+    REGLA CRÍTICA: si wp_post_url no es una URL válida de nuestro sitio,
+    NO se publica en Facebook. Nunca se linkea a la fuente original.
 
-    Si no hay imagen: hace un post de texto + link al artículo (fallback).
+    Si hay imagen:
+      1) Sube foto como no-publicada → photo_id
+      2) Crea post en feed con foto adjunta → aparece en timeline con imagen real
 
-    Retorna el post ID del feed o None si falla.
+    Si no hay imagen: post de texto + link a nuestro artículo.
     """
-    link    = wp_post_url or original_url
+    # ── Validar que el link sea SIEMPRE de nuestro sitio ─────────────────────
+    link = (wp_post_url or "").strip()
+    if not link or WP_DOMAIN not in link:
+        logger.error(
+            f"Facebook BLOQUEADO: la URL '{link}' no pertenece a {WP_DOMAIN}. "
+            f"NUNCA se linkea a fuentes externas. Se cancela la publicación en FB."
+        )
+        return None
+
     message = f"📰 {title}\n\nLeé la nota completa en nuestro sitio 👇\n{link}"
-    page    = config.FB_PAGE_ID
-    token   = config.META_ACCESS_TOKEN
+    page  = config.FB_PAGE_ID
+    token = config.META_ACCESS_TOKEN
 
     try:
         if image_url:
@@ -61,7 +70,7 @@ def post_link(
             return post_id
 
         else:
-            # ── Fallback: post de texto + link (sin imagen) ───────────────────
+            # ── Post de texto + link a nuestro sitio ─────────────────────────
             r = requests.post(
                 f"{GRAPH_URL}/{page}/feed",
                 data={"message": message, "link": link, "access_token": token},

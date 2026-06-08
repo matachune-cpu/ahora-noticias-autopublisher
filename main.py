@@ -347,14 +347,22 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
             featured_media_id=media_id,
         )
 
+        # Si WordPress falló, no seguir — Facebook NUNCA debe linkear a la fuente original
+        if not wp_post_id or not wp_post_url:
+            logger.error(
+                f"WordPress falló para '{rewritten['title'][:60]}' — "
+                f"cancelando FB/IG/WA para evitar linkear a la fuente externa."
+            )
+            database.mark_seen(url, rewritten["title"], source["name"])
+            continue
+
         # 4. Publicar en Facebook
-        # Usamos media_url (imagen ya subida a WP) para garantizar que Facebook
-        # siempre muestre la imagen correcta. Evita que Infobae/otros bloqueen
-        # el hotlink y evita el logo genérico del sitio.
+        # SIEMPRE con la URL de ahoranoticias.com.ar — nunca con la URL original.
+        # facebook.post_link() bloquea automáticamente si la URL no es de nuestro sitio.
         fb_image = media_url or imagen_limpia
         fb_post_id = facebook.post_link(
             title=rewritten["title"],
-            wp_post_url=wp_post_url or url,
+            wp_post_url=wp_post_url,    # solo la URL de WP, sin fallback a url original
             original_url=url,
             image_url=fb_image,
         )
