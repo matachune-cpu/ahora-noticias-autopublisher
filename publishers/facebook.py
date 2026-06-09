@@ -1,4 +1,3 @@
-import json
 import requests
 import logging
 import config
@@ -16,70 +15,42 @@ def post_link(
     image_url: str = None,
 ) -> str | None:
     """
-    Publica en Facebook siempre linkeando a ahoranoticias.com.ar.
+    Publica en Facebook como LINK POST estándar apuntando a ahoranoticias.com.ar.
 
-    REGLA CRÍTICA: si wp_post_url no es una URL válida de nuestro sitio,
-    NO se publica en Facebook. Nunca se linkea a la fuente original.
+    Este método crea un post de tipo "link" que aparece correctamente
+    en el feed principal tanto en escritorio como en la app móvil.
+    Facebook scrapea el og:image del artículo de WordPress (Yoast SEO
+    garantiza que esté configurado correctamente con la imagen destacada).
 
-    Si hay imagen:
-      1) Sube foto como no-publicada → photo_id
-      2) Crea post en feed con foto adjunta → aparece en timeline con imagen real
-
-    Si no hay imagen: post de texto + link a nuestro artículo.
+    REGLA CRÍTICA: si wp_post_url no es de nuestro sitio, se cancela.
+    NUNCA se linkea a la fuente original (Infobae, El Liberal, etc.).
     """
-    # ── Validar que el link sea SIEMPRE de nuestro sitio ─────────────────────
     link = (wp_post_url or "").strip()
     if not link or WP_DOMAIN not in link:
         logger.error(
-            f"Facebook BLOQUEADO: la URL '{link}' no pertenece a {WP_DOMAIN}. "
-            f"NUNCA se linkea a fuentes externas. Se cancela la publicación en FB."
+            f"Facebook BLOQUEADO: '{link}' no pertenece a {WP_DOMAIN}. "
+            f"Publicación cancelada para evitar linkear a fuentes externas."
         )
         return None
 
-    message = f"📰 {title}\n\nLeé la nota completa en nuestro sitio 👇\n{link}"
+    message = f"📰 {title}\n\nLeé la nota completa en nuestro sitio 👇"
     page  = config.FB_PAGE_ID
     token = config.META_ACCESS_TOKEN
 
     try:
-        if image_url:
-            # ── Paso 1: subir foto sin publicar ──────────────────────────────
-            r1 = requests.post(
-                f"{GRAPH_URL}/{page}/photos",
-                data={"url": image_url, "published": "false", "access_token": token},
-                timeout=30,
-            )
-            r1.raise_for_status()
-            photo_id = r1.json().get("id")
-
-            if not photo_id:
-                raise ValueError("No se obtuvo photo_id al subir la imagen")
-
-            # ── Paso 2: crear post en el feed con la foto adjunta ─────────────
-            r2 = requests.post(
-                f"{GRAPH_URL}/{page}/feed",
-                data={
-                    "message": message,
-                    "attached_media[0]": json.dumps({"media_fbid": photo_id}),
-                    "access_token": token,
-                },
-                timeout=30,
-            )
-            r2.raise_for_status()
-            post_id = r2.json().get("id")
-            logger.info(f"Facebook: post con imagen publicado ID={post_id}")
-            return post_id
-
-        else:
-            # ── Post de texto + link a nuestro sitio ─────────────────────────
-            r = requests.post(
-                f"{GRAPH_URL}/{page}/feed",
-                data={"message": message, "link": link, "access_token": token},
-                timeout=20,
-            )
-            r.raise_for_status()
-            post_id = r.json().get("id")
-            logger.info(f"Facebook: link publicado ID={post_id}")
-            return post_id
+        r = requests.post(
+            f"{GRAPH_URL}/{page}/feed",
+            data={
+                "message": message,
+                "link": link,
+                "access_token": token,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        post_id = r.json().get("id")
+        logger.info(f"Facebook: link post publicado ID={post_id} | {link}")
+        return post_id
 
     except requests.exceptions.HTTPError as e:
         logger.error(
