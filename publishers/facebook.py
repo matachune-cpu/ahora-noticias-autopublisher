@@ -1,11 +1,40 @@
 import requests
 import logging
+import time
 import config
 
 logger = logging.getLogger(__name__)
 
 GRAPH_URL = "https://graph.facebook.com/v19.0"
 WP_DOMAIN = "ahoranoticias.com.ar"   # dominio propio — NUNCA linkear a otro
+
+
+def _force_scrape(url: str, token: str) -> str | None:
+    """
+    Fuerza a Facebook a scrapear el og:image del URL ANTES de publicar.
+    Sin esto, Facebook puede publicar el post sin imagen en móvil si el
+    scrape asíncrono no terminó a tiempo.
+    Retorna la URL de la imagen que Facebook encontró, o None.
+    """
+    try:
+        r = requests.get(
+            "https://graph.facebook.com/",
+            params={"id": url, "scrape": "true", "access_token": token},
+            timeout=20,
+        )
+        if r.ok:
+            data = r.json()
+            # Intentar extraer la imagen que Facebook cacheó
+            og = data.get("og_object") or {}
+            imgs = og.get("image") or data.get("image") or []
+            img_url = imgs[0].get("url") if imgs else None
+            logger.info(f"Facebook pre-scrape OK | imagen={img_url or 'ninguna'}")
+            return img_url
+        else:
+            logger.warning(f"Facebook pre-scrape warning: {r.text[:150]}")
+    except Exception as e:
+        logger.warning(f"Facebook pre-scrape error (no fatal): {e}")
+    return None
 
 
 def post_link(
@@ -17,10 +46,10 @@ def post_link(
     """
     Publica en Facebook como LINK POST estándar apuntando a ahoranoticias.com.ar.
 
-    Este método crea un post de tipo "link" que aparece correctamente
-    en el feed principal tanto en escritorio como en la app móvil.
-    Facebook scrapea el og:image del artículo de WordPress (Yoast SEO
-    garantiza que esté configurado correctamente con la imagen destacada).
+    Pasos:
+    1. Valida que el URL sea de nuestro dominio.
+    2. Fuerza el scrape del og:image en Facebook (para que móvil lo muestre al instante).
+    3. Publica el link post con message + link.
 
     REGLA CRÍTICA: si wp_post_url no es de nuestro sitio, se cancela.
     NUNCA se linkea a la fuente original (Infobae, El Liberal, etc.).
@@ -33,9 +62,15 @@ def post_link(
         )
         return None
 
-    message = f"📰 {title}\n\nLeé la nota completa en nuestro sitio 👇"
     page  = config.FB_PAGE_ID
     token = config.META_ACCESS_TOKEN
+
+    # Paso 1: forzar scrape para que Facebook cachee la og:image ANTES de publicar
+    _force_scrape(link, token)
+    # Pequeña pausa para que el scrape se procese
+    time.sleep(3)
+
+    message = f"\U0001f4f0 {title}\n\nLeé la nota completa en nuestro sitio \U0001f447"
 
     try:
         r = requests.post(
