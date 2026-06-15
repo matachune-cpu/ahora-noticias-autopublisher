@@ -17,6 +17,7 @@ import database
 from scraper import fetch_entries, extract_article
 from rewriter import rewrite_article, check_watermark
 from flyer_generator import generate_flyer
+from image_search import search_image
 from publishers import wordpress, facebook, instagram, whatsapp
 
 logging.basicConfig(
@@ -325,6 +326,14 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
         if imagen_limpia and check_watermark(imagen_limpia):
             logger.info(f"Imagen descartada por marca de agua: {imagen_limpia}")
             imagen_limpia = None
+
+        # 1b. Si no hay imagen propia o fue descartada, buscar una ilustrativa en Google
+        if not imagen_limpia:
+            imagen_limpia = search_image(rewritten["title"])
+            if imagen_limpia:
+                logger.info(f"  → Imagen ilustrativa de Google: {imagen_limpia[:100]}")
+            else:
+                logger.info("  → Sin imagen disponible (ni propia ni de Google)")
 
         # 2. Subir foto original a WordPress como imagen destacada
         wp_post_id = None

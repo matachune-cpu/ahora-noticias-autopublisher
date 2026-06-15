@@ -96,3 +96,33 @@ def post_link(
     except Exception as e:
         logger.error(f"Facebook post_link error: {e}")
         return None
+
+
+def delete_post(post_id: str) -> bool:
+    """
+    Elimina un post de Facebook por su ID (formato PAGE_ID_POST_ID o solo POST_ID).
+    Retorna True si se eliminó correctamente.
+    """
+    token = config.META_ACCESS_TOKEN
+    try:
+        r = requests.delete(
+            f"{GRAPH_URL}/{post_id}",
+            params={"access_token": token},
+            timeout=15,
+        )
+        r.raise_for_status()
+        success = r.json().get("success", False)
+        if success:
+            logger.info(f"Facebook: post eliminado ID={post_id}")
+        else:
+            logger.warning(f"Facebook: respuesta inesperada al eliminar {post_id}: {r.text[:200]}")
+        return bool(success)
+    except requests.exceptions.HTTPError as e:
+        logger.error(
+            f"Facebook delete_post HTTP error: {e} | "
+            f"response={e.response.text[:300] if e.response is not None else 'N/A'}"
+        )
+        return False
+    except Exception as e:
+        logger.error(f"Facebook delete_post error: {e}")
+        return False
