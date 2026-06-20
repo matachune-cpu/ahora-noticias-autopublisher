@@ -1,0 +1,68 @@
+name: Publicar URL manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL del artículo a publicar'
+        required: true
+        type: string
+      fuente:
+        description: 'Nombre de la fuente (ej: Nuevo Diario, El Liberal)'
+        required: false
+        default: 'Nuevo Diario'
+        type: string
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SEARCH_API_KEY=${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          GOOGLE_SEARCH_CX=${{ secrets.GOOGLE_SEARCH_CX }}
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          META_ACCESS_TOKEN=${{ secrets.META_ACCESS_TOKEN }}
+          FB_PAGE_ID=${{ secrets.FB_PAGE_ID }}
+          IG_ACCOUNT_ID=${{ secrets.IG_ACCOUNT_ID }}
+          WA_PHONE_NUMBER_ID=${{ secrets.WA_PHONE_NUMBER_ID }}
+          WA_CHANNEL_ID=${{ secrets.WA_CHANNEL_ID }}
+          WA_API_TOKEN=${{ secrets.WA_API_TOKEN }}
+          FLYER_TEMPLATE_PATH=templates/flyer_base.png
+          EOF
+
+      - name: Publicar artículo
+        run: python _publicar_url.py "${{ github.event.inputs.url }}" --fuente "${{ github.event.inputs.fuente }}"
+
+      - name: Guardar base de datos
+        run: |
+          git config user.name "Ahora Noticias Bot"
+          git config user.email "bot@ahoranoticias.com.ar"
+          git add published_articles.db
+          git diff --staged --quiet || git commit -m "DB: publicación manual [skip ci]"
+          git push
