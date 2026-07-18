@@ -197,6 +197,22 @@ def ig_queue_mark_posted(url: str, ig_post_id: str):
         conn.commit()
 
 
+def ig_queue_has_stale(min_hours: int = 12) -> bool:
+    """True si hay posts pendientes que llevan más de min_hours horas en cola."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                """SELECT 1 FROM ig_queue
+                   WHERE posted_at IS NULL AND flyer_public_url IS NOT NULL
+                   AND queued_at < datetime('now', '-' || ? || ' hours')
+                   LIMIT 1""",
+                (min_hours,),
+            ).fetchone()
+            return row is not None
+    except Exception:
+        return False
+
+
 def ig_queue_count_today() -> int:
     """Cuántos posts de IG se publicaron hoy (desde ig_queue)."""
     try:

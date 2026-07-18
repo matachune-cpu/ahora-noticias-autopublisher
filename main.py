@@ -5,6 +5,8 @@ Instagram: cola con scoring de relevancia, publicación en ventanas horarias (6-
 """
 import os
 import re
+import ssl
+import socket
 import time
 import logging
 import schedule
@@ -185,6 +187,22 @@ def _is_ig_window() -> bool:
     """Devuelve True si el horario actual cae en una ventana de publicación IG."""
     hora = datetime.now().hour
     return any(start <= hora < end for start, end in IG_POSTING_WINDOWS)
+
+
+def _ssl_ok() -> bool:
+    """Verifica que ahoranoticias.com.ar tenga SSL válido antes de intentar publicar en IG."""
+    try:
+        ctx = ssl.create_default_context()
+        with ctx.wrap_socket(socket.socket(), server_hostname="ahoranoticias.com.ar") as s:
+            s.settimeout(10)
+            s.connect(("ahoranoticias.com.ar", 443))
+        return True
+    except ssl.SSLCertVerificationError as e:
+        logger.warning(f"Instagram bloqueado: certificado SSL de ahoranoticias.com.ar inválido — {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Instagram bloqueado: no se pudo conectar a ahoranoticias.com.ar — {e}")
+        return False
 
 
 # ── Procesamiento de fuentes ──────────────────────────────────────────────────
@@ -456,12 +474,19 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
 
 def publish_ig_queue():
     """
-    Si estamos en una ventana horaria de IG, publica los artículos más relevantes
-    de la cola. Máximo IG_MAX_PER_RUN por ciclo. Respeta el límite diario.
+    Si estamos en una ventana horaria de IG (o hay posts con >12h de espera),
+    publica los artículos más relevantes de la cola.
+    Máximo IG_MAX_PER_RUN por ciclo. Respeta el límite diario.
     """
-    if not _is_ig_window():
+    if not _ssl_ok():
+        return  # mensaje ya logueado en _ssl_ok()
+
+    hay_posts_viejos = database.ig_queue_has_stale(min_hours=12)
+    if not _is_ig_window() and not hay_posts_viejos:
         logger.debug("Fuera de ventana horaria de Instagram. Cola en espera.")
         return
+    if hay_posts_viejos and not _is_ig_window():
+        logger.info("Instagram: posts con >12h en cola — publicando fuera de ventana horaria.")
 
     posts_hoy = database.ig_queue_count_today()
     restantes_dia = IG_DAILY_LIMIT - posts_hoy
