@@ -1,3 +1,4 @@
+import json
 import requests
 import base64
 import logging
@@ -78,7 +79,11 @@ def create_post(
             payload["featured_media"] = featured_media_id
 
         url = f"{config.WP_URL}/wp-json/wp/v2/posts"
-        resp = requests.post(url, json=payload, headers=_auth_header(), timeout=30)
+        headers = {
+            **_auth_header(),
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(url, data=json.dumps(payload), headers=headers, timeout=30)
         resp.raise_for_status()
         post_data = resp.json()
         post_id = str(post_data["id"])

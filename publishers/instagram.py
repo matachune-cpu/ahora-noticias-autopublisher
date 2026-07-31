@@ -80,3 +80,30 @@ def post_image(image_path: str, caption: str, public_image_url: str = None) -> s
     except Exception as e:
         logger.error(f"Instagram post_image error: {e}")
         return None
+
+
+def delete_post(post_id: str) -> bool:
+    """
+    Elimina un post de Instagram por su ID de media.
+    Retorna True si se eliminó correctamente.
+    """
+    try:
+        r = requests.delete(
+            f"{GRAPH_URL}/{post_id}",
+            params={"access_token": config.META_ACCESS_TOKEN},
+            timeout=15,
+        )
+        r.raise_for_status()
+        success = r.json().get("success", False)
+        if success:
+            logger.info(f"Instagram: post eliminado ID={post_id}")
+        else:
+            logger.warning(f"Instagram: respuesta inesperada al eliminar {post_id}: {r.text[:200]}")
+        return bool(success)
+    except requests.HTTPError as e:
+        body = e.response.text if e.response else ""
+        logger.error(f"Instagram delete_post HTTP error: {e} | {body[:300]}")
+        return False
+    except Exception as e:
+        logger.error(f"Instagram delete_post error: {e}")
+        return False

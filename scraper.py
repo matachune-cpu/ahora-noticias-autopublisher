@@ -9,8 +9,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Cache-Control": "max-age=0",
 }
+
+JINA_URL = "https://r.jina.ai/"
 
 
 @dataclass
@@ -31,6 +42,8 @@ def fetch_entries(source: dict, max_items: int = 10) -> list[dict]:
         return _fetch_labanda_api(source, max_items)
     elif source.get("santiago_ciudad"):
         return _fetch_santiago_ciudad(source, max_items)
+    elif source.get("sde_gobierno"):
+        return _fetch_sde_gobierno(source, max_items)
     elif source.get("scrape_links"):
         return _fetch_by_scraping(source, max_items)
     return []
@@ -74,12 +87,10 @@ def _fetch_labanda_api(source: dict, max_items: int) -> list[dict]:
             if not title:
                 continue
 
-            # Limpiar HTML del contenido
             content_html = n.get("content", "") or n.get("excerpt", "")
             soup = BeautifulSoup(content_html, "lxml")
             full_text = re.sub(r"\s+", " ", soup.get_text(separator=" ", strip=True))
 
-            # Imagen desde Cloudinary
             image_url = None
             img_data = n.get("image")
             if isinstance(img_data, dict):
@@ -89,7 +100,7 @@ def _fetch_labanda_api(source: dict, max_items: int) -> list[dict]:
                 "url": url,
                 "title": title,
                 "summary": n.get("excerpt", ""),
-                "full_text": full_text,    # ya disponible, no hay que scrapear
+                "full_text": full_text,
                 "image_url": image_url,
             })
 
@@ -101,18 +112,12 @@ def _fetch_labanda_api(source: dict, max_items: int) -> list[dict]:
 
 
 def _fetch_santiago_ciudad(source: dict, max_items: int) -> list[dict]:
-    """
-    Scrapea el listado de noticias de santiagociudad.gov.ar.
-    Los títulos están en elementos h6 dentro de cada link de artículo.
-    """
     try:
         resp = requests.get(source["url"], headers=HEADERS, timeout=15)
         resp.raise_for_status()
         resp.encoding = resp.apparent_encoding or "utf-8"
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Los h6 son los títulos reales; cada uno está dentro de un
-        # contenedor que también tiene un link <a href="/noticias/ID-slug">
         h6_tags = soup.find_all("h6")
         seen = set()
         entries = []
@@ -121,11 +126,9 @@ def _fetch_santiago_ciudad(source: dict, max_items: int) -> list[dict]:
             title = h6.get_text(strip=True)
             if len(title) < 15:
                 continue
-            # Descarta fechas sueltas
             if re.match(r"^\d{1,2}[-/]\d{1,2}[-/]\d{4}$", title):
                 continue
 
-            # Buscar el link con /noticias/ID en el mismo contenedor padre
             parent = h6.find_parent(["div", "article", "li", "section"])
             href = None
             if parent:
@@ -133,7 +136,6 @@ def _fetch_santiago_ciudad(source: dict, max_items: int) -> list[dict]:
                     if re.search(r"/noticias/\d+", a["href"]):
                         href = a["href"]
                         break
-            # Fallback: buscar en hermanos
             if not href:
                 for sib in h6.find_all_next("a", limit=3):
                     if re.search(r"/noticias/\d+", sib.get("href", "")):
@@ -156,6 +158,58 @@ def _fetch_santiago_ciudad(source: dict, max_items: int) -> list[dict]:
         return entries
     except Exception as e:
         logger.error(f"Santiago Ciudad scraping error: {e}")
+        return []
+
+
+def _fetch_sde_gobierno(source: dict, max_items: int) -> list[dict]:
+    """
+    Scrapea el listado de noticias del Gobierno de Santiago del Estero (sde.gob.ar).
+    Es un WordPress estándar: artículos en <article class="entry">,
+    título en <h2 class="entry-title"><a>, imagen en primer <img>.
+    """
+    try:
+        resp = requests.get(source["url"], headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        articles = soup.find_all("article", class_="entry")
+        seen = set()
+        entries = []
+
+        for art in articles:
+            title_el = art.find("h2", class_="entry-title")
+            if not title_el:
+                continue
+            link_el = title_el.find("a", href=True)
+            if not link_el:
+                continue
+
+            href = link_el["href"]
+            title = link_el.get_text(strip=True)
+            if not href or len(title) < 15 or href in seen:
+                continue
+            seen.add(href)
+
+            img_el = art.find("img")
+            image_url = None
+            if img_el:
+                image_url = img_el.get("src") or img_el.get("data-src") or img_el.get("data-lazy-src")
+                if image_url and not image_url.startswith("http"):
+                    image_url = None
+
+            entries.append({
+                "url": href,
+                "title": title,
+                "summary": "",
+                "image_url": image_url,
+            })
+            if len(entries) >= max_items:
+                break
+
+        logger.info(f"Gobierno SDE scraping: {len(entries)} artículos encontrados")
+        return entries
+    except Exception as e:
+        logger.error(f"Gobierno SDE scraping error: {e}")
         return []
 
 
@@ -195,12 +249,11 @@ def _fetch_by_scraping(source: dict, max_items: int) -> list[dict]:
         return []
 
 
-# Mantener compatibilidad con código anterior
 def fetch_rss_entries(source: dict, max_items: int = 10) -> list[dict]:
     return fetch_entries(source, max_items)
 
 
-MIN_ARTICLE_CHARS = 400   # texto mínimo para considerar un artículo completo
+MIN_ARTICLE_CHARS = 400
 
 
 def extract_article(url: str, source_name: str, title: str, summary: str,
@@ -209,8 +262,8 @@ def extract_article(url: str, source_name: str, title: str, summary: str,
     Extrae el artículo completo.
     Si full_text e image_url ya vienen dados (ej: La Banda API),
     los usa directamente sin hacer scraping adicional.
+    Intentos en orden: datos pre-cargados → scraping directo → Jina Reader → summary.
     """
-    # Usar datos pre-cargados si están disponibles (evita request extra)
     if full_text and len(full_text.strip()) >= MIN_ARTICLE_CHARS:
         return Article(
             url=url, title=title, summary=summary,
@@ -218,38 +271,70 @@ def extract_article(url: str, source_name: str, title: str, summary: str,
             source_name=source_name, image_url=image_url,
         )
 
+    # Intento 1: scraping directo con headers de navegador completos
+    extracted_image = image_url
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Remove nav, ads, footers
         for tag in soup(["nav", "footer", "script", "style", "aside", "iframe"]):
             tag.decompose()
 
-        # Extract main article text
         texto_util = _extract_text(soup).strip()
-
-        if len(texto_util) < MIN_ARTICLE_CHARS:
-            if len((summary or "").strip()) >= MIN_ARTICLE_CHARS:
-                texto_util = summary
-            else:
-                logger.warning(
-                    f"Articulo descartado por contenido insuficiente "
-                    f"({len(texto_util)} chars < {MIN_ARTICLE_CHARS}): {url}"
-                )
-                return None
-
         extracted_image = image_url or _extract_image(soup, url)
 
+        if len(texto_util) >= MIN_ARTICLE_CHARS:
+            return Article(
+                url=url, title=title, summary=summary,
+                full_text=texto_util, source_name=source_name,
+                image_url=extracted_image,
+            )
+        logger.warning(f"Scraping directo insuficiente ({len(texto_util)} chars): {url}")
+    except Exception as e:
+        logger.warning(f"Scraping directo falló ({e}), intentando Jina Reader: {url}")
+
+    # Intento 2: Jina Reader (bypasa 403 y paywalls blandos)
+    try:
+        jina_resp = requests.get(
+            JINA_URL + url,
+            headers={"Accept": "text/plain", "User-Agent": HEADERS["User-Agent"]},
+            timeout=20,
+        )
+        jina_resp.raise_for_status()
+        texto_jina = jina_resp.text.strip()
+
+        lineas = [l.strip() for l in texto_jina.splitlines() if len(l.strip()) > 40]
+        texto_util = "\n".join(lineas)
+
+        if len(texto_util) >= MIN_ARTICLE_CHARS:
+            titulo_jina = title
+            for linea in texto_jina.splitlines():
+                if linea.startswith("# "):
+                    titulo_jina = linea[2:].strip()
+                    break
+            logger.info(f"Jina Reader: extraído {len(texto_util)} chars de {url}")
+            return Article(
+                url=url,
+                title=titulo_jina or title,
+                summary=summary,
+                full_text=texto_util,
+                source_name=source_name,
+                image_url=extracted_image,
+            )
+        logger.warning(f"Jina Reader insuficiente ({len(texto_util)} chars): {url}")
+    except Exception as e:
+        logger.warning(f"Jina Reader falló: {e}")
+
+    if len((summary or "").strip()) >= MIN_ARTICLE_CHARS:
         return Article(
             url=url, title=title, summary=summary,
-            full_text=texto_util, source_name=source_name,
+            full_text=summary.strip(), source_name=source_name,
             image_url=extracted_image,
         )
-    except Exception as e:
-        logger.error(f"Scrape error for {url}: {e}")
-        return None
+
+    logger.error(f"No se pudo extraer contenido del artículo: {url}")
+    return None
 
 
 def _clean_p(p) -> str:

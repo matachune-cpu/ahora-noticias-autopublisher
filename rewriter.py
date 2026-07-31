@@ -81,6 +81,8 @@ INSTRUCCION IMPORTANTE: Primero evalua si el texto fuente tiene suficiente conte
 5) Es publicidad, spam o sin valor noticioso
 6) Es irrelevante para audiencia argentina (loterias de Mexico, sorteos extranjeros)
 
+NOTA: El texto puede comenzar con metadata de navegacion web (links, menus). Ignoralos y evalua solo el contenido periodistico real.
+
 CRITERIOS DE RELEVANCIA (ig_relevancia):
 - NOTICIAS NACIONALES IMPORTANTES (politica nacional, economia, dolar, inflacion, elecciones, escandalo politico, desastres, crimen organizado, deportes de alto impacto como Mundial o Copa America): SIEMPRE 8-10 puntos. NUNCA se deben descartar.
 - NOTICIAS DE SANTIAGO DEL ESTERO o LA BANDA (municipio, obras, eventos, cultura local): 5-8 puntos segun impacto.
@@ -101,7 +103,7 @@ Campos a completar si es_publicable=true:
 TITULO ORIGINAL: {title}
 
 TEXTO ORIGINAL:
-{original_text[:4000]}"""
+{original_text[:12000]}"""
 
     try:
         response = _get_client().models.generate_content(
