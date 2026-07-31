@@ -150,7 +150,14 @@ def _fetch_santiago_ciudad(source: dict, max_items: int) -> list[dict]:
                 continue
             seen.add(href)
 
-            entries.append({"url": href, "title": title, "summary": ""})
+            # La imagen de la noticia siempre es /images/noticias/{ID}.jpg
+            # El ID es el número al inicio del slug: /noticias/3208-este-viernes...
+            image_url = None
+            id_match = re.search(r"/noticias/(\d+)", href)
+            if id_match:
+                image_url = f"https://www.santiagociudad.gov.ar/images/noticias/{id_match.group(1)}.jpg"
+
+            entries.append({"url": href, "title": title, "summary": "", "image_url": image_url})
             if len(entries) >= max_items:
                 break
 
