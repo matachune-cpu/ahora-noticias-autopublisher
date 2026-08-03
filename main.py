@@ -424,7 +424,6 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
 
 
 def publish_ig_queue():
-<<<<<<< HEAD
     """
     Si estamos en una ventana horaria de IG (o hay posts con >12h de espera),
     publica los artículos más relevantes de la cola.
@@ -435,9 +434,6 @@ def publish_ig_queue():
 
     hay_posts_viejos = database.ig_queue_has_stale(min_hours=12)
     if not _is_ig_window() and not hay_posts_viejos:
-=======
-    if not _is_ig_window():
->>>>>>> origin/main
         logger.debug("Fuera de ventana horaria de Instagram. Cola en espera.")
         return
     if hay_posts_viejos and not _is_ig_window():
