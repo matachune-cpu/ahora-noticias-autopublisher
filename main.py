@@ -378,6 +378,7 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
             wp_post_url=wp_post_url,
             original_url=url,
             image_url=fb_image,
+            caption=rewritten.get("facebook_caption"),
         )
 
         # 6. Generar flyer y encolar en Instagram (imagen validada — no puede ser None)
