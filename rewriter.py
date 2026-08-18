@@ -60,8 +60,10 @@ def check_watermark(image_url: str) -> bool:
             logger.info(f"Marca de agua detectada en: {image_url}")
         return has_watermark
     except Exception as e:
-        logger.warning(f"No se pudo verificar marca de agua: {e}")
-        return False
+        # En caso de error (ej: cuota Gemini agotada) descartamos la imagen
+        # para evitar que logos de agencias pasen sin verificar.
+        logger.warning(f"No se pudo verificar marca de agua — imagen descartada por precaución: {e}")
+        return True
 
 
 def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
@@ -94,7 +96,8 @@ Si SI es publicable, reescribi completamente la noticia de {source_name} con tus
 Campos a completar si es_publicable=true:
 - titulo: titulo nuevo, atractivo y original
 - cuerpo_html: cuerpo completo en HTML con parrafos <p>, minimo 4 parrafos
-- caption_instagram: caption con emojis y hashtags al final
+- caption_instagram: caption de Instagram. REGLAS: (1) Empieza con una frase de IMPACTO o dato sorprendente que enganche en la primera linea antes del "ver mas" — sin empezar con el titulo. (2) Tono conversacional, directo, como habla un santiagueno. (3) Termina SIEMPRE con una pregunta al lector que invite a comentar (ej: "¿Vos que opinas?", "¿Lo sabias?", "¿Que pensas de esto?"). (4) Maximo 5 hashtags relevantes al final. (5) NO usar frases genericas tipo "Te contamos", "Enterate", "La noticia de hoy".
+- caption_facebook: caption para Facebook. REGLAS: (1) Primera linea = frase gancho o pregunta provocadora que genere reaccion (like, comentario, compartir). (2) Desarrolla brevemente el tema en 2-3 oraciones. (3) Cierra con pregunta directa al lector. (4) Sin hashtags o maximo 2. (5) Tono mas informal y emocional que el articulo. Maximo 300 caracteres en total.
 - texto_whatsapp: texto corto maximo 500 caracteres
 - categoria: UNA de estas: Politica, Economia, Salud, Medio Ambiente, Tecnologia, Sociedad, Seguridad, Deportes, Cultura. O nombre del pais si es internacional.
 - region: exactamente "Argentina", "Latinoamerica" o "Internacional"
@@ -118,6 +121,7 @@ TEXTO ORIGINAL:
                         "titulo": {"type": "string"},
                         "cuerpo_html": {"type": "string"},
                         "caption_instagram": {"type": "string"},
+                        "caption_facebook": {"type": "string"},
                         "texto_whatsapp": {"type": "string"},
                         "categoria": {"type": "string"},
                         "region": {
@@ -150,6 +154,7 @@ TEXTO ORIGINAL:
             "title": titulo,
             "body_html": cuerpo,
             "instagram_caption": data.get("caption_instagram", ""),
+            "facebook_caption": data.get("caption_facebook", ""),
             "whatsapp_text": data.get("texto_whatsapp", ""),
             "categoria": data.get("categoria", "").strip(),
             "region": data.get("region", "Argentina").strip(),

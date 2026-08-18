@@ -35,17 +35,19 @@ def post_link(
     wp_post_url: str,
     original_url: str,
     image_url: str = None,
+    caption: str = None,
 ) -> str | None:
     """
-    Publica en Facebook como link post estándar y da like automático.
+    Publica en Facebook apuntando a ahoranoticias.com.ar.
 
-    El like de la propia página activa la señal de engagement que el
-    algoritmo NPE móvil necesita para mostrar el post en el feed.
-    Sin ese like inicial, los posts API quedan invisibles en móvil
-    aunque están públicos y se ven correctamente en escritorio.
+    Si hay imagen: publica como FOTO (endpoint /photos) con la URL como texto
+    plano en el mensaje — el algoritmo de Meta no penaliza este formato como
+    los link posts (3-5× más alcance orgánico). Da like propio al publicar.
+
+    Si no hay imagen: fallback a link post con like automático.
 
     REGLA CRÍTICA: si wp_post_url no es de nuestro sitio, se cancela.
-    NUNCA se linkea a la fuente original (Infobae, El Liberal, etc.).
+    NUNCA se linkea a la fuente original.
     """
     link = (wp_post_url or "").strip()
     if not link or WP_DOMAIN not in link:
@@ -58,8 +60,52 @@ def post_link(
     page  = config.FB_PAGE_ID
     token = config.META_ACCESS_TOKEN
 
-    message = f"\U0001f4f0 {title}\n\nLeé la nota completa en nuestro sitio \U0001f447"
+    if image_url:
+        return _post_photo(page, token, image_url, caption or title, link)
+    else:
+        return _post_link_fallback(page, token, title, link, caption)
 
+
+def _post_photo(page: str, token: str, image_url: str, caption: str, link: str) -> str | None:
+    """
+    Publica como foto (endpoint /photos). Mayor alcance orgánico que link posts
+    porque Meta no detecta intención de sacar usuarios de la plataforma.
+    La URL va como texto plano al final del mensaje.
+    """
+    message = f"{caption}\n\n🔗 {link}"
+    try:
+        r = requests.post(
+            f"{GRAPH_URL}/{page}/photos",
+            data={
+                "url": image_url,
+                "message": message,
+                "access_token": token,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        post_id = r.json().get("id") or r.json().get("post_id")
+        logger.info(f"Facebook: foto publicada ID={post_id}")
+
+        if post_id:
+            time.sleep(2)
+            _like_post(post_id, token)
+
+        return post_id
+    except requests.exceptions.HTTPError as e:
+        logger.error(
+            f"Facebook photo post HTTP error: {e} | "
+            f"response={e.response.text[:300] if e.response is not None else 'N/A'}"
+        )
+        return None
+    except Exception as e:
+        logger.error(f"Facebook _post_photo error: {e}")
+        return None
+
+
+def _post_link_fallback(page: str, token: str, title: str, link: str, caption: str = None) -> str | None:
+    """Fallback a link post cuando no hay imagen disponible."""
+    message = caption or f"📰 {title}\n\nLeé la nota completa en nuestro sitio 👇"
     try:
         r = requests.post(
             f"{GRAPH_URL}/{page}/feed",
@@ -72,23 +118,21 @@ def post_link(
         )
         r.raise_for_status()
         post_id = r.json().get("id")
-        logger.info(f"Facebook: link post publicado ID={post_id} | {link}")
+        logger.info(f"Facebook: link post (sin imagen) ID={post_id} | {link}")
 
-        # Dar like propio para activar distribución en feed móvil (NPE)
         if post_id:
             time.sleep(2)
             _like_post(post_id, token)
 
         return post_id
-
     except requests.exceptions.HTTPError as e:
         logger.error(
-            f"Facebook HTTP error: {e} | "
+            f"Facebook link fallback HTTP error: {e} | "
             f"response={e.response.text[:300] if e.response is not None else 'N/A'}"
         )
         return None
     except Exception as e:
-        logger.error(f"Facebook post_link error: {e}")
+        logger.error(f"Facebook _post_link_fallback error: {e}")
         return None
 
 

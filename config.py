@@ -44,7 +44,7 @@ NEWS_SOURCES = [
         "max_articles": 5,
         "always_include": True,
     },
-    # ── GOBIERNO DE LA PROVINCIA DE SANTIAGO DEL ESTERO ─────────────
+    # ── GOBIERNO DE LA PROVINCIA DE SANTIAGO DEL ESTERO ──────────────
     {
         "name": "Gobierno SDE",
         "sde_gobierno": True,
@@ -75,6 +75,28 @@ NEWS_SOURCES = [
         "url": "https://www.cadena3.com",
         "scrape_links": True,
         "article_selector": "a[href*='/noticia/']",
+        "max_articles": 3,
+    },
+    # ── ECONOMÍA ARGENTINA — crisis, dólar, inflación ────────────────
+    {
+        "name": "Ámbito Financiero",
+        "rss": "https://www.ambito.com/rss.xml",
+        "url": "https://www.ambito.com",
+        "scrape_links": False,
+        "max_articles": 4,
+    },
+    {
+        "name": "iProfesional",
+        "rss": "https://www.iprofesional.com/rss/home.xml",
+        "url": "https://www.iprofesional.com",
+        "scrape_links": False,
+        "max_articles": 3,
+    },
+    {
+        "name": "El Cronista",
+        "rss": "https://www.cronista.com/rss/ultimas-noticias.xml",
+        "url": "https://www.cronista.com",
+        "scrape_links": False,
         "max_articles": 3,
     },
 ]
