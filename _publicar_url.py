@@ -67,26 +67,31 @@ def publicar(url: str, fuente: str):
         sys.exit(1)
     logger.info(f"Título reescrito: {rewritten['title'][:80]}")
 
-    # 4. Imagen: solo descarta logos/iconos evidentes; Gemini verifica watermark
-    # (NO filtramos por dominio — la imagen del propio artículo es relevante aunque
-    #  venga de Infobae/El Liberal; el filtro de dominio solo aplica a búsquedas Google)
-    from image_search import _url_parece_logo
-    imagen = article.image_url
-    if imagen:
-        if _url_parece_logo(imagen):
-            logger.info(f"Imagen descartada por URL de logo: {imagen[:80]}")
-            imagen = None
-        elif check_watermark(imagen):
-            logger.info(f"Imagen descartada por marca de agua: {imagen[:80]}")
-            imagen = None
-    if not imagen:
-        imagen = search_image(rewritten["title"])
-        if imagen:
-            logger.info(f"Imagen de Google: {imagen[:100]}")
-        else:
-            logger.info("Sin imagen propia ni de Google — se usará flyer con fondo degradado")
+    # 4. Resolver imagen con validación completa (técnica + semántica + visual Gemini)
+    from image_resolver import resolve_news_image
+    img_result = resolve_news_image(
+        title=rewritten["title"],
+        summary=rewritten.get("whatsapp_text", ""),
+        article_url=url,
+        article_image_url=article.image_url,
+    )
 
-    # 5. Subir imagen de artículo a WordPress (si hay)
+    if img_result["status"] != "VALIDATED":
+        logger.warning(
+            f"Sin imagen validada — publicación social cancelada. "
+            f"Razones: {img_result.get('rejection_reasons', [])}"
+        )
+        imagen = None
+        imagen_validada = False
+    else:
+        imagen = img_result["image_url"]
+        imagen_validada = True
+        logger.info(
+            f"Imagen validada | estrategia={img_result['strategy']} "
+            f"| score={img_result['final_score']:.0f} | {imagen[:80]}"
+        )
+
+    # 5. Subir imagen a WordPress si hay
     media_id = None
     media_url = None
     if imagen:
@@ -109,7 +114,35 @@ def publicar(url: str, fuente: str):
         sys.exit(1)
     logger.info(f"WordPress: post creado → {wp_post_url}")
 
-    # 7. Generar flyer ANTES de publicar en redes (garantiza imagen para FB e IG)
+    # 7. WhatsApp — puede publicar sin imagen (solo texto + link)
+    wa_sent = whatsapp.send_to_channel(
+        text=rewritten.get("whatsapp_text", ""),
+        wp_post_url=wp_post_url,
+    )
+
+    # GUARD CLAUSE: no publicar en redes sociales sin imagen validada
+    if not imagen_validada:
+        logger.warning(
+            "SOCIAL_PUBLICATION_BLOCKED: imagen no validada. "
+            "Noticia publicada en WordPress y WhatsApp únicamente."
+        )
+        database.mark_published(
+            url=url,
+            title=rewritten["title"],
+            source=fuente,
+            wp_post_id=str(wp_post_id),
+            fb_post_id=None,
+            ig_post_id=None,
+            wa_sent=wa_sent,
+        )
+        logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        logger.info("PUBLICADO (solo web, sin redes por falta de imagen validada)")
+        logger.info(f"  WP:  {wp_post_url}")
+        logger.info(f"  WA:  {wa_sent}")
+        logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        return
+
+    # 8. Generar flyer ANTES de publicar en redes (imagen ya validada — no puede ser None)
     ig_post_id = None
     flyer_path = None
     flyer_url = None
@@ -138,7 +171,7 @@ def publicar(url: str, fuente: str):
             except Exception:
                 pass
 
-    # 8. Publicar en Facebook — imagen de artículo > flyer > sin imagen
+    # 9. Publicar en Facebook — imagen de artículo > flyer
     fb_image = media_url or flyer_url
     fb_post_id = facebook.post_link(
         title=rewritten["title"],
@@ -149,7 +182,7 @@ def publicar(url: str, fuente: str):
     )
     logger.info(f"Facebook: {'OK ID=' + str(fb_post_id) if fb_post_id else 'FALLÓ'} | imagen={'sí' if fb_image else 'no'}")
 
-    # 9. Publicar en Instagram con el mismo flyer
+    # 10. Publicar en Instagram con el mismo flyer
     if flyer_url:
         try:
             ig_post_id = instagram.post_image(
@@ -160,12 +193,6 @@ def publicar(url: str, fuente: str):
             logger.info(f"Instagram: {'OK ID=' + str(ig_post_id) if ig_post_id else 'FALLÓ'}")
         except Exception as e:
             logger.error(f"Error en Instagram: {e}")
-
-    # 10. WhatsApp
-    wa_sent = whatsapp.send_to_channel(
-        text=rewritten.get("whatsapp_text", ""),
-        wp_post_url=wp_post_url,
-    )
 
     # 11. Registrar en DB
     database.mark_published(
@@ -179,7 +206,7 @@ def publicar(url: str, fuente: str):
     )
 
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    logger.info(f"✓ PUBLICADO")
+    logger.info(f"PUBLICADO")
     logger.info(f"  WP:  {wp_post_url}")
     logger.info(f"  FB:  {fb_post_id or 'falló'}")
     logger.info(f"  IG:  {ig_post_id or 'falló'}")

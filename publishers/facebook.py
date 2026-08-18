@@ -40,11 +40,17 @@ def post_link(
     """
     Publica en Facebook apuntando a ahoranoticias.com.ar.
 
+    GUARD CLAUSE DE IMAGEN: Esta función solo debe llamarse desde el pipeline
+    principal cuando imagen_validada=True (validada por image_resolver.py).
+    Sin imagen_url, se llama a _post_link_fallback como contingencia, pero
+    el flujo normal garantiza que image_url siempre esté presente.
+
     Si hay imagen: publica como FOTO (endpoint /photos) con la URL como texto
     plano en el mensaje — el algoritmo de Meta no penaliza este formato como
     los link posts (3-5× más alcance orgánico). Da like propio al publicar.
 
-    Si no hay imagen: fallback a link post con like automático.
+    Si no hay imagen (no debería ocurrir en flujo normal): fallback a link post
+    con warning prominente.
 
     REGLA CRÍTICA: si wp_post_url no es de nuestro sitio, se cancela.
     NUNCA se linkea a la fuente original.
@@ -63,6 +69,11 @@ def post_link(
     if image_url:
         return _post_photo(page, token, image_url, caption or title, link)
     else:
+        # Esto no debería ocurrir en el flujo normal (image_resolver garantiza imagen validada)
+        logger.warning(
+            "Facebook: post_link llamado SIN imagen validada — "
+            "esto no debería ocurrir en el flujo normal. Usando fallback de link post."
+        )
         return _post_link_fallback(page, token, title, link, caption)
 
 

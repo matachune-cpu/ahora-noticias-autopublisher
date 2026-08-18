@@ -18,10 +18,18 @@ def post_image(image_path: str, caption: str, public_image_url: str = None) -> s
     public_image_url: URL pública accesible por Meta (requerido).
     image_path: no se usa directamente (la imagen ya está en WP como URL pública).
     Retorna el post ID o None si falla.
+
+    GUARD CLAUSE DE IMAGEN: Esta función solo debe llamarse desde el pipeline
+    principal cuando imagen_validada=True (validada por image_resolver.py)
+    y el flyer fue generado exitosamente. Si public_image_url es None,
+    es una señal de error en el flujo — no publicar.
     """
     try:
         if not public_image_url:
-            logger.error("Instagram: no hay URL pública de imagen disponible.")
+            logger.error(
+                "Instagram: BLOQUEADO — no hay URL pública de imagen disponible. "
+                "El flujo normal garantiza que esta función solo se llame con imagen validada."
+            )
             return None
 
         # Paso 1: crear container de media

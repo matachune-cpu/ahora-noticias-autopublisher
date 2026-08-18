@@ -17,9 +17,9 @@ from datetime import datetime
 import config
 import database
 from scraper import fetch_entries, extract_article
-from rewriter import rewrite_article, check_watermark
+from rewriter import rewrite_article
 from flyer_generator import generate_flyer
-from image_search import search_image
+from image_resolver import resolve_news_image
 from publishers import wordpress, facebook, instagram, whatsapp
 
 logging.basicConfig(
@@ -291,19 +291,28 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
         categoria = rewritten.get("categoria", "")
         ig_score = rewritten.get("ig_relevancia", 5)
 
-        # 1. Verificar marca de agua
-        imagen_limpia = article.image_url
-        if imagen_limpia and check_watermark(imagen_limpia):
-            logger.info(f"Imagen descartada por marca de agua: {imagen_limpia}")
-            imagen_limpia = None
+        # 1. Resolver imagen con validación completa (técnica + semántica + visual Gemini)
+        img_result = resolve_news_image(
+            title=rewritten["title"],
+            summary=rewritten.get("whatsapp_text", ""),
+            article_url=url,
+            article_image_url=article.image_url,
+        )
 
-        # 1b. Si no hay imagen propia o fue descartada, buscar una ilustrativa en Google
-        if not imagen_limpia:
-            imagen_limpia = search_image(rewritten["title"])
-            if imagen_limpia:
-                logger.info(f"  → Imagen ilustrativa de Google: {imagen_limpia[:100]}")
-            else:
-                logger.info("  → Sin imagen disponible (ni propia ni de Google)")
+        if img_result["status"] != "VALIDATED":
+            logger.warning(
+                f"  → Sin imagen validada — redes sociales bloqueadas. "
+                f"Razones: {img_result.get('rejection_reasons', [])[:2]}"
+            )
+            imagen_limpia = None
+            imagen_validada = False
+        else:
+            imagen_limpia = img_result["image_url"]
+            imagen_validada = True
+            logger.info(
+                f"  → Imagen validada | estrategia={img_result['strategy']} "
+                f"| score={img_result['final_score']:.0f}"
+            )
 
         # 2. Subir foto original a WordPress como imagen destacada
         wp_post_id = None
@@ -334,7 +343,35 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
             database.mark_seen(url, rewritten["title"], source["name"])
             continue
 
-        # 4. Publicar en Facebook
+        # 4. WhatsApp — puede publicar sin imagen
+        wa_sent = whatsapp.send_to_channel(
+            text=rewritten["whatsapp_text"],
+            wp_post_url=wp_post_url,
+        )
+
+        # GUARD CLAUSE: no publicar en redes sociales sin imagen validada
+        if not imagen_validada:
+            logger.warning(
+                f"SOCIAL_PUBLICATION_BLOCKED: imagen no validada para "
+                f"'{rewritten['title'][:60]}'. Publicado solo en WP + WA."
+            )
+            database.mark_published(
+                url=url,
+                title=rewritten["title"],
+                source=source["name"],
+                wp_post_id=str(wp_post_id) if wp_post_id else None,
+                fb_post_id=None,
+                ig_post_id=None,
+                wa_sent=wa_sent,
+            )
+            titulos_recientes.append(rewritten["title"])
+            if rewritten.get("region", "Argentina") != "Argentina" and no_argentina_count is not None:
+                no_argentina_count[0] += 1
+            processed += 1
+            time.sleep(5)
+            continue
+
+        # 5. Publicar en Facebook (imagen validada garantizada)
         fb_image = media_url or imagen_limpia
         fb_post_id = facebook.post_link(
             title=rewritten["title"],
@@ -343,7 +380,7 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
             image_url=fb_image,
         )
 
-        # 5. Generar flyer y encolar en Instagram
+        # 6. Generar flyer y encolar en Instagram (imagen validada — no puede ser None)
         flyer_public_url = None
         flyer_path = None
         ig_encolado = False
@@ -377,7 +414,7 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
                 ig_encolado = added
                 logger.info(
                     f"  → IG cola: score={ig_score}/10 | "
-                    f"{'encolado ✓' if added else 'ya en cola'} | "
+                    f"{'encolado' if added else 'ya en cola'} | "
                     f"pendientes={database.ig_queue_count_pending()}"
                 )
             except Exception as e:
@@ -391,12 +428,6 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
         else:
             logger.info(f"  → IG omitido: score={ig_score}/10 (mínimo {IG_RELEVANCE_MIN})")
 
-        # 6. WhatsApp
-        wa_sent = whatsapp.send_to_channel(
-            text=rewritten["whatsapp_text"],
-            wp_post_url=wp_post_url,
-        )
-
         # 7. Registrar en DB
         database.mark_published(
             url=url,
@@ -409,7 +440,7 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
         )
 
         logger.info(
-            f"✓ Publicado: WP={wp_post_id} | FB={fb_post_id} | "
+            f"Publicado: WP={wp_post_id} | FB={fb_post_id} | "
             f"IG={'en cola' if ig_encolado else 'omitido'} | WA={wa_sent}"
         )
         titulos_recientes.append(rewritten["title"])

@@ -146,22 +146,18 @@ def generate_flyer(
     categoria: str = "",
 ) -> str:
 
+    # Imagen validada es obligatoria — no hay fallback de color sólido ni degradado
+    if not article_image_url:
+        raise ValueError("VALID_IMAGE_REQUIRED: No se puede generar flyer sin imagen validada")
+
+    photo = _fetch_photo(article_image_url)
+    if not photo:
+        raise ValueError("VALID_IMAGE_REQUIRED: No se pudo descargar la imagen validada")
+
     canvas = Image.new("RGB", FLYER_SIZE, WHITE)
 
     # ── 1. FOTO SUPERIOR ──────────────────────────────────────────────
-    photo = _fetch_photo(article_image_url) if article_image_url else None
-    if photo:
-        photo_crop = _fit_crop(photo, FLYER_W, PHOTO_HEIGHT)
-    else:
-        # Degradado oscuro de arriba a abajo como fallback visual
-        photo_crop = Image.new("RGB", (FLYER_W, PHOTO_HEIGHT))
-        grad_draw = ImageDraw.Draw(photo_crop)
-        for y in range(PHOTO_HEIGHT):
-            t = y / PHOTO_HEIGHT
-            r = int(18 + (50 - 18) * t)
-            g = int(18 + (50 - 18) * t)
-            b = int(32 + (80 - 32) * t)
-            grad_draw.line([(0, y), (FLYER_W, y)], fill=(r, g, b))
+    photo_crop = _fit_crop(photo, FLYER_W, PHOTO_HEIGHT)
     canvas.paste(photo_crop, (0, 0))
 
     # ── 2. LÍNEA ROJA ─────────────────────────────────────────────────
