@@ -67,20 +67,24 @@ def publicar(url: str, fuente: str):
         sys.exit(1)
     logger.info(f"Título reescrito: {rewritten['title'][:80]}")
 
-    # 4. Imagen: verificar marca de agua → fallback a Google Images
+    # 4. Imagen: pre-filtro por dominio → watermark check → fallback Google
+    from image_search import _dominio_es_medio, _url_parece_logo
     imagen = article.image_url
     if imagen:
-        if check_watermark(imagen):
-            logger.info(f"Imagen descartada por marca de agua: {imagen}")
+        if _dominio_es_medio(imagen) or _url_parece_logo(imagen):
+            logger.info(f"Imagen descartada por dominio/URL de medio: {imagen[:80]}")
+            imagen = None
+        elif check_watermark(imagen):
+            logger.info(f"Imagen descartada por marca de agua: {imagen[:80]}")
             imagen = None
     if not imagen:
         imagen = search_image(rewritten["title"])
         if imagen:
             logger.info(f"Imagen de Google: {imagen[:100]}")
         else:
-            logger.info("Sin imagen disponible (ni propia ni de Google)")
+            logger.info("Sin imagen propia ni de Google — se usará flyer como imagen")
 
-    # 5. Subir imagen a WordPress
+    # 5. Subir imagen de artículo a WordPress (si hay)
     media_id = None
     media_url = None
     if imagen:
@@ -103,18 +107,10 @@ def publicar(url: str, fuente: str):
         sys.exit(1)
     logger.info(f"WordPress: post creado → {wp_post_url}")
 
-    # 7. Publicar en Facebook
-    fb_post_id = facebook.post_link(
-        title=rewritten["title"],
-        wp_post_url=wp_post_url,
-        original_url=url,
-        image_url=media_url or imagen,
-    )
-    logger.info(f"Facebook: {'OK ID=' + str(fb_post_id) if fb_post_id else 'FALLÓ'}")
-
-    # 8. Generar flyer y publicar en Instagram (directo, sin encolar)
+    # 7. Generar flyer ANTES de publicar en redes (garantiza imagen para FB e IG)
     ig_post_id = None
     flyer_path = None
+    flyer_url = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             flyer_path = tmp.name
@@ -130,15 +126,9 @@ def publicar(url: str, fuente: str):
             image_path=flyer_path,
             filename=f"flyer-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
         )
-        if flyer_url:
-            ig_post_id = instagram.post_image(
-                image_path=None,
-                caption=rewritten["instagram_caption"],
-                public_image_url=flyer_url,
-            )
-            logger.info(f"Instagram: {'OK ID=' + str(ig_post_id) if ig_post_id else 'FALLÓ'}")
+        logger.info(f"Flyer generado: {flyer_url[:80] if flyer_url else 'falló'}")
     except Exception as e:
-        logger.error(f"Error en flyer/Instagram: {e}")
+        logger.error(f"Error generando flyer: {e}")
     finally:
         if flyer_path and os.path.exists(flyer_path):
             try:
@@ -146,13 +136,36 @@ def publicar(url: str, fuente: str):
             except Exception:
                 pass
 
-    # 9. WhatsApp
+    # 8. Publicar en Facebook — imagen de artículo > flyer > sin imagen
+    fb_image = media_url or flyer_url
+    fb_post_id = facebook.post_link(
+        title=rewritten["title"],
+        wp_post_url=wp_post_url,
+        original_url=url,
+        image_url=fb_image,
+        caption=rewritten.get("facebook_caption"),
+    )
+    logger.info(f"Facebook: {'OK ID=' + str(fb_post_id) if fb_post_id else 'FALLÓ'} | imagen={'sí' if fb_image else 'no'}")
+
+    # 9. Publicar en Instagram con el mismo flyer
+    if flyer_url:
+        try:
+            ig_post_id = instagram.post_image(
+                image_path=None,
+                caption=rewritten["instagram_caption"],
+                public_image_url=flyer_url,
+            )
+            logger.info(f"Instagram: {'OK ID=' + str(ig_post_id) if ig_post_id else 'FALLÓ'}")
+        except Exception as e:
+            logger.error(f"Error en Instagram: {e}")
+
+    # 10. WhatsApp
     wa_sent = whatsapp.send_to_channel(
         text=rewritten.get("whatsapp_text", ""),
         wp_post_url=wp_post_url,
     )
 
-    # 10. Registrar en DB
+    # 11. Registrar en DB
     database.mark_published(
         url=url,
         title=rewritten["title"],
