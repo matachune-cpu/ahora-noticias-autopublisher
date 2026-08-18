@@ -28,7 +28,7 @@ TECHNICAL_DESIRED_WIDTH = 800              # px deseable
 
 SEMANTIC_MIN_SCORE = 30                    # umbral bajo — muchas fotos no tienen alt text
 VISUAL_MIN_CONFIDENCE = 75                # confianza mínima de Gemini
-FINAL_MIN_SCORE = 65                       # umbral de score combinado
+FINAL_MIN_SCORE = 55                       # umbral de score combinado
 
 PLACEHOLDER_NAMES = {
     "placeholder", "default", "noimage", "no-image", "no_image",
@@ -223,9 +223,9 @@ def _validate_semantic(title: str, image_url: str, alt_text: str = "", page_titl
     combined_kw = _keywords(combined)
 
     if not combined_kw:
-        # Sin datos para comparar — score neutro bajo
-        return {"score": 25, "passed": False,
-                "rejection_reason": "Sin metadatos de imagen para comparar (alt, título)"}
+        # Sin metadatos comparables (filename genérico, sin alt text) — score neutro.
+        # Gemini Vision ya evalúa la relevancia semántica visualmente.
+        return {"score": 50, "passed": True}
 
     intersection = title_kw & combined_kw
     score = int(100 * len(intersection) / len(title_kw))
@@ -595,6 +595,7 @@ def resolve_news_image(
             title=title,
             summary=summary,
             strategy="article_direct",
+            page_title=title,  # imagen del mismo artículo → título es el contexto
         )
         attempts.append(result)
         if result["status"] == "VALIDATED":
