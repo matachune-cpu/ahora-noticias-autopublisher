@@ -153,7 +153,15 @@ def generate_flyer(
     if photo:
         photo_crop = _fit_crop(photo, FLYER_W, PHOTO_HEIGHT)
     else:
-        photo_crop = Image.new("RGB", (FLYER_W, PHOTO_HEIGHT), (70, 70, 70))
+        # Degradado oscuro de arriba a abajo como fallback visual
+        photo_crop = Image.new("RGB", (FLYER_W, PHOTO_HEIGHT))
+        grad_draw = ImageDraw.Draw(photo_crop)
+        for y in range(PHOTO_HEIGHT):
+            t = y / PHOTO_HEIGHT
+            r = int(18 + (50 - 18) * t)
+            g = int(18 + (50 - 18) * t)
+            b = int(32 + (80 - 32) * t)
+            grad_draw.line([(0, y), (FLYER_W, y)], fill=(r, g, b))
     canvas.paste(photo_crop, (0, 0))
 
     # ── 2. LÍNEA ROJA ─────────────────────────────────────────────────

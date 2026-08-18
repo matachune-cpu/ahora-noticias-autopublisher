@@ -60,10 +60,10 @@ def check_watermark(image_url: str) -> bool:
             logger.info(f"Marca de agua detectada en: {image_url}")
         return has_watermark
     except Exception as e:
-        # En caso de error (ej: cuota Gemini agotada) descartamos la imagen
-        # para evitar que logos de agencias pasen sin verificar.
-        logger.warning(f"No se pudo verificar marca de agua — imagen descartada por precaución: {e}")
-        return True
+        # En caso de error (ej: cuota Gemini agotada) conservamos la imagen.
+        # El filtro por URL (_url_parece_logo) ya descartó los casos obvios antes de llegar acá.
+        logger.warning(f"No se pudo verificar marca de agua — imagen conservada: {e}")
+        return False
 
 
 def rewrite_article(title: str, original_text: str, source_name: str) -> dict:

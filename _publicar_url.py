@@ -67,12 +67,14 @@ def publicar(url: str, fuente: str):
         sys.exit(1)
     logger.info(f"Título reescrito: {rewritten['title'][:80]}")
 
-    # 4. Imagen: pre-filtro por dominio → watermark check → fallback Google
-    from image_search import _dominio_es_medio, _url_parece_logo
+    # 4. Imagen: solo descarta logos/iconos evidentes; Gemini verifica watermark
+    # (NO filtramos por dominio — la imagen del propio artículo es relevante aunque
+    #  venga de Infobae/El Liberal; el filtro de dominio solo aplica a búsquedas Google)
+    from image_search import _url_parece_logo
     imagen = article.image_url
     if imagen:
-        if _dominio_es_medio(imagen) or _url_parece_logo(imagen):
-            logger.info(f"Imagen descartada por dominio/URL de medio: {imagen[:80]}")
+        if _url_parece_logo(imagen):
+            logger.info(f"Imagen descartada por URL de logo: {imagen[:80]}")
             imagen = None
         elif check_watermark(imagen):
             logger.info(f"Imagen descartada por marca de agua: {imagen[:80]}")
@@ -82,7 +84,7 @@ def publicar(url: str, fuente: str):
         if imagen:
             logger.info(f"Imagen de Google: {imagen[:100]}")
         else:
-            logger.info("Sin imagen propia ni de Google — se usará flyer como imagen")
+            logger.info("Sin imagen propia ni de Google — se usará flyer con fondo degradado")
 
     # 5. Subir imagen de artículo a WordPress (si hay)
     media_id = None
