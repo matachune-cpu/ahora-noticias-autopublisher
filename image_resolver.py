@@ -27,7 +27,7 @@ TECHNICAL_MIN_WIDTH = 400                   # px mínimo aceptable
 TECHNICAL_DESIRED_WIDTH = 800              # px deseable
 
 SEMANTIC_MIN_SCORE = 30                    # umbral bajo — muchas fotos no tienen alt text
-VISUAL_MIN_CONFIDENCE = 75                # confianza mínima de Gemini
+VISUAL_MIN_CONFIDENCE = 60                # confianza mínima de Gemini
 FINAL_MIN_SCORE = 55                       # umbral de score combinado
 
 PLACEHOLDER_NAMES = {
@@ -406,17 +406,24 @@ def _evaluate_candidate(
 
     if not vision["passed"]:
         reason = vision.get("rejection_reason", "validación visual fallida")
-        logger.debug(f"    Visual RECHAZADA: {reason}")
-        return {
-            "status": "REJECTED",
-            "strategy": strategy,
-            "image_url": image_url,
-            "rejection_reason": f"[VISUAL] {reason}",
-            "technical_score": technical_score,
-            "semantic_score": semantic_score,
-            "visual_score": visual_score,
-            "vision_result": vision,
-        }
+        logger.debug(f"    Visual parcial: {reason}")
+        # Hard reject solo si Gemini dice explícitamente que es engañosa, inapropiada o placeholder
+        # — NO rechazar solo por confianza baja en imagen contextual válida
+        if (not vision.get("appropriate", True)
+                or vision.get("risk_of_misleading", False)
+                or vision.get("is_placeholder", False)):
+            return {
+                "status": "REJECTED",
+                "strategy": strategy,
+                "image_url": image_url,
+                "rejection_reason": f"[VISUAL] {reason}",
+                "technical_score": technical_score,
+                "semantic_score": semantic_score,
+                "visual_score": visual_score,
+                "vision_result": vision,
+            }
+        # Baja confianza pero imagen apropiada → continuar con score reducido
+        rejection_reasons.append(f"[VISUAL-BAJA-CONFIANZA] {reason}")
 
     # Score final ponderado
     final_score = technical_score * 0.20 + semantic_score * 0.35 + visual_score * 0.45
