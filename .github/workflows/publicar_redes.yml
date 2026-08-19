@@ -8,11 +8,24 @@ on:
         required: false
         default: '10'
         type: string
+      delay_minutes:
+        description: 'Minutos de espera entre cada publicación'
+        required: false
+        default: '5'
+        type: string
+      reset:
+        description: 'Borrar posts anteriores y republicar desde cero'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   publicar:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 90
     permissions:
       contents: write
 
@@ -51,7 +64,12 @@ jobs:
           EOF
 
       - name: Publicar en redes sociales
-        run: python _publicar_redes.py --max ${{ github.event.inputs.max }}
+        run: |
+          ARGS="--max ${{ github.event.inputs.max }} --delay-minutes ${{ github.event.inputs.delay_minutes }}"
+          if [ "${{ github.event.inputs.reset }}" = "true" ]; then
+            ARGS="$ARGS --reset"
+          fi
+          python _publicar_redes.py $ARGS
 
       - name: Guardar base de datos
         run: |

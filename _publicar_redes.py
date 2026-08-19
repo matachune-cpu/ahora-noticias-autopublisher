@@ -118,26 +118,39 @@ def generar_captions(title: str, body_text: str, source: str) -> dict:
     key = os.getenv("GEMINI_API_KEY")
     client = genai.Client(api_key=key)
 
-    prompt = f"""Sos redactor de Ahora Noticias (Santiago del Estero, Argentina).
-Generá DOS captions para redes sociales de esta nota, en base al título y contenido.
+    prompt = f"""Sos redactor senior de Ahora Noticias (Santiago del Estero, Argentina).
+Generá DOS captions para esta nota. Usá TODA la información disponible del contenido.
 
 TÍTULO: {title}
-FUENTE: {source}
 CONTENIDO: {body_text}
 
-REGLAS CAPTION FACEBOOK:
-- Primera línea = gancho emocional puro: dato impactante, cifra, nombre + hecho, verbo fuerte
-- EJEMPLOS buenos: "Tenía 3 años y no llegó a tiempo." / "El gobierno le cortó la beca a 50.000 jóvenes."
-- 2-3 oraciones con dato concreto
-- Cierra con pregunta que invite a comentar
-- SIN hashtags. Máximo 450 caracteres total.
+━━━ CAPTION FACEBOOK ━━━
+FORMATO OBLIGATORIO (usar saltos de línea reales entre cada bloque):
 
-REGLAS CAPTION INSTAGRAM:
-- Primera línea = GOLPE EMOCIONAL antes del "ver más": dato duro, cifra, nombre + hecho visceral
-- 2-4 oraciones con los datos más importantes, tono directo
-- Termina SIEMPRE con pregunta al lector
-- Máximo 5 hashtags relevantes al final
-- NO usar "Te contamos", "Enterate", "La noticia de hoy"
+[LÍNEA 1 — HOOK IMPACTO: una sola oración corta, golpe emocional puro. Dato duro, cifra concreta, nombre propio + hecho. Termina en punto. SIN rodeos. Ejemplos: "Tenía 3 años y no llegó a tiempo." / "50.000 jubilados perdieron el bono de golpe." / "Lo detuvieron con 200 kg de droga a 10km de la ciudad."]
+
+[PÁRRAFO 2 — EL HECHO: 2-3 oraciones cortas explicando qué pasó, cuándo, dónde, quién. Información concreta de la nota.]
+
+[PÁRRAFO 3 — CONTEXTO O CONSECUENCIAS: 1-2 oraciones. Qué significa esto, qué pasó antes, qué viene después.]
+
+[PREGUNTA FINAL al lector: directa, genera debate o reflexión. Ejemplos: "¿Qué opinás de esta medida?" / "¿Creés que se hará justicia?" / "¿Sabías que esto estaba pasando?"]
+
+REGLAS: SIN hashtags. SIN mencionar la fuente. Máximo 500 caracteres. Tono periodístico directo, como habla un santiagueño.
+
+━━━ CAPTION INSTAGRAM ━━━
+FORMATO (saltos de línea entre bloques):
+
+[LÍNEA 1 — GOLPE VISCERAL antes del "ver más": dato impactante, cifra, nombre + hecho. La gente tiene que parar el scroll.]
+
+[PÁRRAFO 2: 2-3 oraciones con los datos más importantes de la nota. Directo, sin rodeos.]
+
+[PÁRRAFO 3: 1-2 oraciones de contexto o consecuencia importante.]
+
+[PREGUNTA FINAL: invita a opinar o reflexionar.]
+
+[HASHTAGS: máximo 5, relevantes al tema]
+
+REGLAS: NO usar "Te contamos", "Enterate", "La noticia de hoy", "En nuestro portal". SIN mencionar la fuente original.
 """
 
     try:
@@ -154,7 +167,7 @@ REGLAS CAPTION INSTAGRAM:
                     },
                     "required": ["caption_facebook", "caption_instagram"],
                 },
-                temperature=0.7,
+                temperature=0.8,
             ),
         )
         data = json.loads(response.text)
@@ -273,13 +286,59 @@ def publicar_en_redes(article: dict) -> bool:
     return False
 
 
+def reset_social_posts(max_items: int):
+    """Borra los últimos N posts de FB/IG y resetea la DB para republicarlos."""
+    from publishers.facebook import delete_post as fb_delete
+
+    with sqlite3.connect(database.DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT original_url, title, fb_post_id, ig_post_id
+            FROM articles
+            WHERE fb_post_id IS NOT NULL AND fb_post_id != ''
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max_items,),
+        ).fetchall()
+
+    if not rows:
+        logger.info("No hay posts recientes en redes para borrar.")
+        return
+
+    logger.info(f"Borrando {len(rows)} posts de Facebook...")
+    for url, title, fb_post_id, ig_post_id in rows:
+        logger.info(f"  Borrando FB post {fb_post_id}: {title[:60]}")
+        ok = fb_delete(fb_post_id)
+        logger.info(f"  {'OK' if ok else 'FALLÓ (ya puede estar borrado)'}")
+
+        # Resetear en DB
+        with sqlite3.connect(database.DB_PATH) as conn:
+            conn.execute(
+                "UPDATE articles SET fb_post_id = NULL, ig_post_id = NULL WHERE url_hash = ?",
+                (database.url_hash(url),),
+            )
+            conn.commit()
+
+    logger.info(f"DB reseteada. {len(rows)} artículos listos para republicar.")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--max", type=int, default=10,
                         help="Máximo de artículos a publicar en redes (default: 10)")
+    parser.add_argument("--delay-minutes", type=int, default=0,
+                        help="Minutos de espera entre cada publicación (default: 0)")
+    parser.add_argument("--reset", action="store_true",
+                        help="Borrar los últimos posts en redes y resetear DB antes de publicar")
     args = parser.parse_args()
 
     database.init_db()
+
+    if args.reset:
+        logger.info("Modo RESET: borrando posts anteriores...")
+        reset_social_posts(args.max)
+        logger.info("Reset completado. Iniciando republicación...")
 
     logger.info(f"Buscando artículos sin publicación en redes (máx {args.max})...")
     articles = get_pending_articles(args.max)
@@ -301,6 +360,12 @@ def main():
         except Exception as e:
             logger.error(f"  Error inesperado: {e}")
             fail += 1
+
+        # Pausa entre publicaciones
+        if args.delay_minutes > 0 and i < len(articles):
+            logger.info(f"  Esperando {args.delay_minutes} minuto(s) antes del siguiente...")
+            import time
+            time.sleep(args.delay_minutes * 60)
 
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     logger.info(f"Completado: {ok} publicados en redes, {fail} fallaron o sin imagen")
