@@ -1,15 +1,15 @@
 """
 Busca posts de WordPress sin imagen destacada y les agrega una.
+Extrae la URL original de la fuente del contenido del post y la usa para resolver la imagen.
 
 Uso:
-    python _fix_images.py [--max 50] [--dry-run]
-
---max N    : procesar máximo N posts sin imagen (default: 100)
---dry-run  : mostrar qué haría sin hacer cambios reales
+    python _fix_images.py [--max 50]
 """
 import argparse
+import json
 import logging
 import os
+import re
 import sys
 import time
 
@@ -18,6 +18,7 @@ load_dotenv()
 
 import requests
 import base64
+from bs4 import BeautifulSoup
 
 import config
 from image_resolver import resolve_news_image
@@ -37,7 +38,7 @@ def _auth():
 
 
 def get_posts_without_image(max_posts: int) -> list[dict]:
-    """Devuelve posts publicados sin imagen destacada (featured_media == 0)."""
+    """Devuelve posts publicados sin imagen destacada con su contenido."""
     results = []
     page = 1
     per_page = 50
@@ -48,13 +49,13 @@ def get_posts_without_image(max_posts: int) -> list[dict]:
             "status": "publish",
             "per_page": per_page,
             "page": page,
-            "_fields": "id,title,link,featured_media",
+            "_fields": "id,title,link,featured_media,content",
             "orderby": "date",
             "order": "desc",
         }
         resp = requests.get(url, params=params, headers=_auth(), timeout=20)
         if resp.status_code == 400:
-            break  # sin más páginas
+            break
         resp.raise_for_status()
         posts = resp.json()
         if not posts:
@@ -62,10 +63,13 @@ def get_posts_without_image(max_posts: int) -> list[dict]:
 
         for p in posts:
             if p.get("featured_media", 0) == 0:
+                content_html = p.get("content", {}).get("rendered", "")
+                original_url = _extract_source_url(content_html)
                 results.append({
                     "id": p["id"],
                     "title": p["title"]["rendered"],
                     "link": p["link"],
+                    "original_url": original_url,
                 })
             if len(results) >= max_posts:
                 break
@@ -78,9 +82,55 @@ def get_posts_without_image(max_posts: int) -> list[dict]:
     return results
 
 
+def _extract_source_url(content_html: str) -> str:
+    """
+    Extrae la URL de la fuente original del HTML de atribución al pie del post.
+    Formato: <a href="URL" target="_blank" rel="noopener">Fuente</a>
+    """
+    try:
+        soup = BeautifulSoup(content_html, "html.parser")
+        # Buscar el párrafo de atribución "Fuente original:"
+        for p in soup.find_all("p"):
+            text = p.get_text()
+            if "Fuente original" in text or "fuente original" in text:
+                a = p.find("a", href=True)
+                if a and a["href"].startswith("http"):
+                    return a["href"]
+        # Fallback: cualquier enlace externo (no ahoranoticias)
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if href.startswith("http") and "ahoranoticias" not in href:
+                return href
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_og_image(url: str) -> str:
+    """Scrape directo de og:image de una URL."""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,*/*",
+        }
+        resp = requests.get(url, headers=headers, timeout=12, allow_redirects=True)
+        if resp.status_code != 200:
+            return ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for prop in ["og:image", "twitter:image"]:
+            tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
+            if tag and tag.get("content"):
+                return tag["content"]
+    except Exception as e:
+        logger.debug(f"  og:image scrape error: {e}")
+    return ""
+
+
 def upload_image(image_url: str, filename: str) -> tuple:
     try:
-        r = requests.get(image_url, timeout=15)
+        r = requests.get(image_url, timeout=15,
+                         headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
         ct = r.headers.get("Content-Type", "image/jpeg")
         ext = "jpg" if "jpeg" in ct or "jpg" in ct else ct.split("/")[-1]
@@ -107,7 +157,6 @@ def update_post_image(post_id: int, media_id: int) -> bool:
     try:
         url = f"{config.WP_URL}/wp-json/wp/v2/posts/{post_id}"
         headers = {**_auth(), "Content-Type": "application/json"}
-        import json
         resp = requests.post(
             url,
             headers=headers,
@@ -121,51 +170,55 @@ def update_post_image(post_id: int, media_id: int) -> bool:
         return False
 
 
-def fix_post(post: dict, dry_run: bool) -> bool:
+def fix_post(post: dict) -> bool:
     title = post["title"]
     post_id = post["id"]
-    link = post["link"]
+    original_url = post.get("original_url", "")
 
     logger.info(f"━━ Post #{post_id}: {title[:70]}")
+    logger.info(f"   Fuente original: {original_url[:80] if original_url else '(no encontrada)'}")
 
-    img_result = resolve_news_image(
-        title=title,
-        summary="",
-        article_url=link,
-        article_image_url=None,
-    )
+    image_url = None
 
-    if img_result["status"] != "VALIDATED":
-        reasons = img_result.get("rejection_reasons", [])
-        logger.warning(f"  Sin imagen validada: {reasons}")
+    # Estrategia 1: scrape directo de og:image de la fuente original
+    if original_url:
+        og = _extract_og_image(original_url)
+        if og:
+            logger.info(f"   og:image directo: {og[:80]}")
+            image_url = og
+
+    # Estrategia 2: image_resolver con la URL original como article_url
+    if not image_url:
+        img_result = resolve_news_image(
+            title=title,
+            summary="",
+            article_url=original_url or post["link"],
+            article_image_url=None,
+        )
+        if img_result["status"] == "VALIDATED":
+            image_url = img_result["image_url"]
+            logger.info(f"   image_resolver: {image_url[:80]}")
+
+    if not image_url:
+        logger.warning(f"   Sin imagen encontrada — saltando.")
         return False
-
-    image_url = img_result["image_url"]
-    strategy = img_result["strategy"]
-    score = img_result["final_score"]
-    logger.info(f"  Imagen encontrada | estrategia={strategy} score={score:.0f} | {image_url[:70]}")
-
-    if dry_run:
-        logger.info(f"  [DRY-RUN] No se sube nada.")
-        return True
 
     media_id, media_url = upload_image(image_url, f"foto-post-{post_id}")
     if not media_id:
-        logger.error(f"  No se pudo subir la imagen.")
+        logger.error(f"   No se pudo subir la imagen.")
         return False
 
     ok = update_post_image(post_id, media_id)
     if ok:
-        logger.info(f"  ✓ Post #{post_id} actualizado con imagen.")
+        logger.info(f"   OK — Post #{post_id} actualizado con imagen.")
     else:
-        logger.error(f"  Error al actualizar el post.")
+        logger.error(f"   Error al actualizar el post.")
     return ok
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max", type=int, default=100, help="Máximo de posts a procesar")
-    parser.add_argument("--dry-run", action="store_true", help="No hacer cambios reales")
+    parser.add_argument("--max", type=int, default=100)
     args = parser.parse_args()
 
     logger.info(f"Buscando posts sin imagen (máx {args.max})...")
@@ -180,14 +233,13 @@ def main():
     skipped = 0
     for i, post in enumerate(posts, 1):
         logger.info(f"[{i}/{len(posts)}]")
-        ok = fix_post(post, dry_run=args.dry_run)
+        ok = fix_post(post)
         if ok:
             fixed += 1
         else:
             skipped += 1
-        # Pausa entre llamadas a Gemini para no saturar la API
         if i < len(posts):
-            time.sleep(2)
+            time.sleep(1)
 
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     logger.info(f"Completado: {fixed} posts con imagen nueva, {skipped} sin imagen encontrada")
