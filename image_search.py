@@ -136,8 +136,12 @@ def search_image(query: str) -> str | None:
 
             if not img_url.startswith("http"):
                 continue
-            if not img_url.lower().endswith(_IMG_EXTS):
-                continue
+            # Filtro de extensión flexible: acepta CDN URLs sin extensión visible
+            url_sin_params = img_url.split("?")[0].lower()
+            if url_sin_params and not any(url_sin_params.endswith(e) for e in _IMG_EXTS):
+                # Si no tiene extensión de imagen, verifica que no sea claramente no-imagen
+                if any(url_sin_params.endswith(e) for e in (".svg", ".gif", ".bmp", ".ico", ".html", ".js", ".css")):
+                    continue
             if _url_parece_logo(img_url):
                 logger.debug(f"  [IMG] Descartada por URL de logo: {img_url[:80]}")
                 continue
