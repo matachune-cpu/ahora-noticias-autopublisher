@@ -118,6 +118,19 @@ _CATEGORIAS_KW = [
     ("Sociedad", []),  # fallback
 ]
 
+# Santiago del Estero es la base del sitio, no necesita prefijo de provincia
+_PROVINCIAS_SIN_PREFIJO = {"Santiago del Estero"}
+
+
+def _titulo_con_provincia(title: str, provincia: str) -> str:
+    """Integra la provincia en el título de forma natural en redacción periodística."""
+    if not provincia or provincia in _PROVINCIAS_SIN_PREFIJO:
+        return title
+    # Bajar la primera letra para que la oración fluya naturalmente
+    resto = title[0].lower() + title[1:] if title and title[0].isupper() else title
+    return f"En {provincia}, {resto}"
+
+
 _STOPWORDS = {
     "el","la","los","las","un","una","de","del","al","en","con","por","para",
     "que","se","lo","le","y","o","a","es","son","fue","ha","hay","no","si",
@@ -259,11 +272,15 @@ def run(max_articles: int = 10):
             cat_id = _get_categoria_id(categoria_nombre)
             categories = [cat_id] if cat_id else []
 
+            # Título con provincia integrada en redacción natural
+            provincia = source.get("provincia", "")
+            titulo_final = _titulo_con_provincia(title, provincia)
+
             body_html = _build_body_html(article.full_text, source["name"], url)
 
             try:
                 wp_post_id, wp_post_url = wordpress.create_post(
-                    title=title,
+                    title=titulo_final,
                     body_html=body_html,
                     original_url=url,
                     source_name=source["name"],
@@ -281,9 +298,8 @@ def run(max_articles: int = 10):
                 titulos_recientes.append(title)
                 nuevos_ids.append(int(wp_post_id))
                 publicados += 1
-                provincia = source.get("provincia", "")
                 logger.info(
-                    f"  ✓ [{provincia or 'Nacional'}] [{categoria_nombre}] {title[:55]} | WP ID={wp_post_id}"
+                    f"  ✓ [{provincia or 'Nacional'}] [{categoria_nombre}] {titulo_final[:60]} | WP ID={wp_post_id}"
                 )
             else:
                 database.mark_seen(url, title, source["name"])
