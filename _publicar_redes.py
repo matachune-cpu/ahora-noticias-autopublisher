@@ -271,18 +271,7 @@ def publicar_en_redes(article: dict) -> bool:
         logger.error(f"  No se pudieron generar captions: {e} — saltando artículo")
         return False
 
-    # 4. Publicar en Facebook
-    fb_post_id = facebook.post_link(
-        title=title,
-        wp_post_url=wp_post_url,
-        original_url=url,
-        image_url=image_url,
-        caption=captions["facebook"],
-    )
-    logger.info(f"  Facebook: {'OK ID=' + str(fb_post_id) if fb_post_id else 'FALLÓ'}")
-
-    # 5. Generar flyer e Instagram
-    ig_post_id = None
+    # 4. Generar flyer (se usa tanto en Facebook como en Instagram)
     flyer_path = None
     flyer_url = None
     try:
@@ -310,18 +299,33 @@ def publicar_en_redes(article: dict) -> bool:
             except Exception:
                 pass
 
-    if flyer_url:
-        try:
-            ig_post_id = instagram.post_image(
-                image_path=None,
-                caption=captions["instagram"],
-                public_image_url=flyer_url,
-            )
-            logger.info(f"  Instagram: {'OK ID=' + str(ig_post_id) if ig_post_id else 'FALLÓ'}")
-        except Exception as e:
-            logger.error(f"  Error en Instagram: {e}")
+    if not flyer_url:
+        logger.warning("  Sin flyer — saltando Facebook e Instagram")
+        return False
 
-    # 6. Actualizar DB
+    # 5. Publicar en Facebook con el flyer
+    fb_post_id = facebook.post_link(
+        title=title,
+        wp_post_url=wp_post_url,
+        original_url=url,
+        image_url=flyer_url,
+        caption=captions["facebook"],
+    )
+    logger.info(f"  Facebook: {'OK ID=' + str(fb_post_id) if fb_post_id else 'FALLÓ'}")
+
+    # 6. Publicar en Instagram con el mismo flyer
+    ig_post_id = None
+    try:
+        ig_post_id = instagram.post_image(
+            image_path=None,
+            caption=captions["instagram"],
+            public_image_url=flyer_url,
+        )
+        logger.info(f"  Instagram: {'OK ID=' + str(ig_post_id) if ig_post_id else 'FALLÓ'}")
+    except Exception as e:
+        logger.error(f"  Error en Instagram: {e}")
+
+    # 7. Actualizar DB
     if fb_post_id or ig_post_id:
         update_db_social(url, str(fb_post_id) if fb_post_id else None, str(ig_post_id) if ig_post_id else None)
         logger.info(f"  DB actualizada.")
