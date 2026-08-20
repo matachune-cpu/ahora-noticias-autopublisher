@@ -514,6 +514,18 @@ def publish_ig_queue():
         time.sleep(4)
 
 
+def _contar_publicados() -> int:
+    import sqlite3
+    try:
+        with sqlite3.connect(database.DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE wp_post_id IS NOT NULL"
+            ).fetchone()
+            return row[0] if row else 0
+    except Exception:
+        return 0
+
+
 def run_cycle():
     logger.info("=" * 60)
     logger.info(f"Iniciando ciclo: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -522,15 +534,27 @@ def run_cycle():
     logger.info(f"Deduplicador cargado: {len(titulos_recientes)} títulos de las últimas {DEDUP_HOURS}h")
 
     no_argentina_count = [0]
+    publicados_tanda = [0]
+
+    original_process = process_source
+
+    def _tracked_process(source, titulos_recientes, no_argentina_count):
+        antes = _contar_publicados()
+        original_process(source, titulos_recientes, no_argentina_count)
+        publicados_tanda[0] += _contar_publicados() - antes
 
     for source in config.NEWS_SOURCES:
         try:
-            process_source(source, titulos_recientes, no_argentina_count)
+            _tracked_process(source, titulos_recientes, no_argentina_count)
         except Exception as e:
             logger.error(f"Error procesando {source['name']}: {e}")
         time.sleep(3)
 
-    logger.info(f"Ciclo: {no_argentina_count[0]} artículos internacionales (catástrofes) publicados (máx {MAX_NO_ARGENTINA_POR_CICLO}/ciclo)")
+    logger.info(
+        f"━━━ RESUMEN TANDA ━━━ "
+        f"Publicados: {publicados_tanda[0]} | "
+        f"Internacionales (catástrofes): {no_argentina_count[0]}/{MAX_NO_ARGENTINA_POR_CICLO}"
+    )
 
     provincias_cubiertas = {s.get("provincia") for s in config.NEWS_SOURCES if s.get("provincia")}
     logger.info(f"Provincias monitoreadas: {len(provincias_cubiertas)} | {sorted(provincias_cubiertas)}")
