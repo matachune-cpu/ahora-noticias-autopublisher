@@ -111,73 +111,114 @@ def _html_to_text(html: str) -> str:
 
 
 def generar_captions(title: str, body_text: str, source: str) -> dict:
-    """Usa Gemini para generar caption_facebook e caption_instagram."""
+    """Usa Gemini para generar caption_facebook e caption_instagram.
+
+    Lanza excepción si Gemini falla — el caller decide si saltear el artículo.
+    Nunca devuelve solo el título como fallback silencioso.
+    """
     from google import genai
     from google.genai import types
+
+    logger.info(f"  Generando captions — body_text: {len(body_text)} chars")
+    if len(body_text) < 50:
+        raise ValueError(f"body_text demasiado corto para generar captions: {len(body_text)} chars")
 
     key = os.getenv("GEMINI_API_KEY")
     client = genai.Client(api_key=key)
 
     prompt = f"""Sos redactor senior de Ahora Noticias (Santiago del Estero, Argentina).
-Generá DOS captions para esta nota. Usá TODA la información disponible del contenido.
+Tu tarea: escribir DOS textos para publicar en redes sociales basándote EXCLUSIVAMENTE en el contenido de la nota que te paso.
 
-TÍTULO: {title}
-CONTENIDO: {body_text}
+TÍTULO DE LA NOTA: {title}
 
-━━━ CAPTION FACEBOOK ━━━
-FORMATO OBLIGATORIO (usar saltos de línea reales entre cada bloque):
+CONTENIDO DE LA NOTA:
+{body_text}
 
-[LÍNEA 1 — HOOK IMPACTO: una sola oración corta, golpe emocional puro. Dato duro, cifra concreta, nombre propio + hecho. Termina en punto. SIN rodeos. Ejemplos: "Tenía 3 años y no llegó a tiempo." / "50.000 jubilados perdieron el bono de golpe." / "Lo detuvieron con 200 kg de droga a 10km de la ciudad."]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEXTO 1 — FACEBOOK (campo: caption_facebook)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-[PÁRRAFO 2 — EL HECHO: 2-3 oraciones cortas explicando qué pasó, cuándo, dónde, quién. Información concreta de la nota.]
+Estructura OBLIGATORIA con saltos de línea entre cada bloque:
 
-[PÁRRAFO 3 — CONTEXTO O CONSECUENCIAS: 1-2 oraciones. Qué significa esto, qué pasó antes, qué viene después.]
+LÍNEA 1 (HOOK): Una oración sola. Dato duro, cifra o hecho concreto que golpee. Sin rodeos. Ejemplos: "Tenía 3 años y no llegó a tiempo." / "50.000 jubilados perdieron el bono de un día para el otro." / "Lo atraparon con 200 kilos de droga a 10 km del centro."
 
-[PREGUNTA FINAL al lector: directa, genera debate o reflexión. Ejemplos: "¿Qué opinás de esta medida?" / "¿Creés que se hará justicia?" / "¿Sabías que esto estaba pasando?"]
+[línea vacía]
 
-REGLAS: SIN hashtags. SIN mencionar la fuente. Máximo 500 caracteres. Tono periodístico directo, como habla un santiagueño.
+PÁRRAFO 2 (EL HECHO): 2-3 oraciones cortas. Quién, qué, cuándo, dónde. Toda la info concreta de la nota.
 
-━━━ CAPTION INSTAGRAM ━━━
-FORMATO (saltos de línea entre bloques):
+[línea vacía]
 
-[LÍNEA 1 — GOLPE VISCERAL antes del "ver más": dato impactante, cifra, nombre + hecho. La gente tiene que parar el scroll.]
+PÁRRAFO 3 (CONTEXTO): 1-2 oraciones. Qué significa esto, qué antecedentes hay, qué viene después.
 
-[PÁRRAFO 2: 2-3 oraciones con los datos más importantes de la nota. Directo, sin rodeos.]
+[línea vacía]
 
-[PÁRRAFO 3: 1-2 oraciones de contexto o consecuencia importante.]
+PREGUNTA FINAL: Una pregunta directa al lector que genere debate o reflexión. Ejemplos: "¿Qué opinás de esta medida?" / "¿Creés que se va a hacer justicia?" / "¿Sabías que esto estaba pasando en Santiago?"
 
-[PREGUNTA FINAL: invita a opinar o reflexionar.]
+REGLAS ESTRICTAS:
+- SIN hashtags
+- SIN mencionar la fuente original (ni Infobae, ni El Liberal, ni ningún otro medio)
+- NO invitar a visitar la web — el link se agrega automáticamente aparte
+- Tono periodístico directo, como habla un santiagueño
+- Máximo 450 caracteres en total
 
-[HASHTAGS: máximo 5, relevantes al tema]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEXTO 2 — INSTAGRAM (campo: caption_instagram)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-REGLAS: NO usar "Te contamos", "Enterate", "La noticia de hoy", "En nuestro portal". SIN mencionar la fuente original.
+IMPORTANTE: En Instagram el usuario DEBE poder leer la noticia COMPLETA acá. No hay link a la web. La persona se tiene que informar leyendo este texto solo.
+
+Estructura OBLIGATORIA con saltos de línea entre cada bloque:
+
+LÍNEA 1 (GANCHO): Una oración que haga parar el scroll. El dato más impactante de la nota.
+
+[línea vacía]
+
+PÁRRAFO 2 (LA NOTICIA): 3-4 oraciones. Contá TODO lo importante: quién, qué pasó, cuándo, dónde, cómo. El lector tiene que quedar informado leyendo esto.
+
+[línea vacía]
+
+PÁRRAFO 3 (CONTEXTO): 2-3 oraciones. Antecedentes, consecuencias, qué cambia a partir de esto.
+
+[línea vacía]
+
+PREGUNTA FINAL: Una pregunta que invite a opinar o reflexionar.
+
+[línea vacía]
+
+HASHTAGS: 4-5 hashtags relevantes al tema (#SantiagoDelEstero u otros según corresponda)
+
+REGLAS ESTRICTAS:
+- NUNCA escribir "visitá nuestra web", "leé la nota completa", "link en bio", "entrá a nuestro sitio" ni ninguna invitación al sitio web
+- NUNCA mencionar la fuente original
+- El texto debe ser autosuficiente: quien lo lee queda completamente informado
 """
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema={
-                    "type": "object",
-                    "properties": {
-                        "caption_facebook": {"type": "string"},
-                        "caption_instagram": {"type": "string"},
-                    },
-                    "required": ["caption_facebook", "caption_instagram"],
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema={
+                "type": "object",
+                "properties": {
+                    "caption_facebook": {"type": "string"},
+                    "caption_instagram": {"type": "string"},
                 },
-                temperature=0.8,
-            ),
-        )
-        data = json.loads(response.text)
-        return {
-            "facebook": data.get("caption_facebook", title),
-            "instagram": data.get("caption_instagram", title),
-        }
-    except Exception as e:
-        logger.warning(f"  Gemini captions error: {e} — usando título como caption")
-        return {"facebook": title, "instagram": title}
+                "required": ["caption_facebook", "caption_instagram"],
+            },
+            temperature=0.7,
+        ),
+    )
+    data = json.loads(response.text)
+    fb = data.get("caption_facebook", "").strip()
+    ig = data.get("caption_instagram", "").strip()
+
+    if not fb or not ig:
+        raise ValueError(f"Gemini devolvió captions vacíos: fb={len(fb)} ig={len(ig)}")
+
+    logger.info(f"  Caption FB ({len(fb)} chars): {fb[:100]}...")
+    logger.info(f"  Caption IG ({len(ig)} chars): {ig[:100]}...")
+    return {"facebook": fb, "instagram": ig}
 
 
 def update_db_social(url: str, fb_post_id: str, ig_post_id: str):
@@ -224,8 +265,11 @@ def publicar_en_redes(article: dict) -> bool:
 
     # 3. Generar captions con Gemini
     body_text = _html_to_text(content_html)
-    captions = generar_captions(title, body_text, source)
-    logger.info(f"  Caption FB: {captions['facebook'][:80]}...")
+    try:
+        captions = generar_captions(title, body_text, source)
+    except Exception as e:
+        logger.error(f"  No se pudieron generar captions: {e} — saltando artículo")
+        return False
 
     # 4. Publicar en Facebook
     fb_post_id = facebook.post_link(
