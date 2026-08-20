@@ -1,0 +1,55 @@
+name: Publicar sin IA (modo emergencia)
+
+on:
+  workflow_dispatch:
+    inputs:
+      max:
+        description: 'Máximo de artículos a publicar'
+        required: false
+        default: '10'
+        type: string
+  schedule:
+    - cron: '15 * * * *'   # cada hora en el minuto 15
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          EOF
+
+      - name: Publicar artículos sin IA
+        run: python _publicar_sin_ia.py --max ${{ github.event.inputs.max || '10' }}
+
+      - name: Guardar base de datos
+        run: |
+          git config user.name "Ahora Noticias Bot"
+          git config user.email "bot@ahoranoticias.com.ar"
+          git add published_articles.db
+          git diff --staged --quiet || git commit -m "DB: publicar_sin_ia [skip ci]"
+          git push
