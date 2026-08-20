@@ -109,7 +109,7 @@ _INFOBAE_URL_SKIP = [
     r"infobae\.com/en/",
 ]
 
-MAX_NO_ARGENTINA_POR_CICLO = 2
+MAX_NO_ARGENTINA_POR_CICLO = 1
 
 _CADENA3_AUTOPROMOCIONAL = [
     r"\bcadena\s*3\b",
@@ -263,10 +263,16 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
 
         region = rewritten.get("region", "Argentina")
 
-        if region != "Argentina" and no_argentina_count is not None:
-            if no_argentina_count[0] >= MAX_NO_ARGENTINA_POR_CICLO:
+        if region in ("Internacional", "Latinoamerica"):
+            if not rewritten.get("es_catastrofe", False):
                 logger.info(
-                    f"  [CUOTA] Límite no-Argentina alcanzado ({MAX_NO_ARGENTINA_POR_CICLO}) "
+                    f"  [INTERNACIONAL] Descartado — no es catástrofe: {rewritten['title'][:60]}"
+                )
+                database.mark_seen(url, rewritten["title"], source["name"])
+                continue
+            if no_argentina_count is not None and no_argentina_count[0] >= MAX_NO_ARGENTINA_POR_CICLO:
+                logger.info(
+                    f"  [CUOTA] Límite internacional alcanzado ({MAX_NO_ARGENTINA_POR_CICLO}/ciclo) "
                     f"— saltando: {rewritten['title'][:60]}"
                 )
                 database.mark_seen(url, rewritten["title"], source["name"])
@@ -524,7 +530,10 @@ def run_cycle():
             logger.error(f"Error procesando {source['name']}: {e}")
         time.sleep(3)
 
-    logger.info(f"Ciclo: {no_argentina_count[0]} artículos no-argentinos publicados (máx {MAX_NO_ARGENTINA_POR_CICLO})")
+    logger.info(f"Ciclo: {no_argentina_count[0]} artículos internacionales (catástrofes) publicados (máx {MAX_NO_ARGENTINA_POR_CICLO}/ciclo)")
+
+    provincias_cubiertas = {s.get("provincia") for s in config.NEWS_SOURCES if s.get("provincia")}
+    logger.info(f"Provincias monitoreadas: {len(provincias_cubiertas)} | {sorted(provincias_cubiertas)}")
 
     publish_ig_queue()
 

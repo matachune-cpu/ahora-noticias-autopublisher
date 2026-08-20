@@ -102,6 +102,7 @@ Campos a completar si es_publicable=true:
 - categoria: UNA de estas: Politica, Economia, Salud, Medio Ambiente, Tecnologia, Sociedad, Seguridad, Deportes, Cultura. O nombre del pais si es internacional.
 - region: exactamente "Argentina", "Latinoamerica" o "Internacional"
 - ig_relevancia: puntaje 1-10 para audiencia argentina. 10=maximo impacto. 7-9=importante. 4-6=moderado. 1-3=irrelevante.
+- es_catastrofe: true SOLO si region es "Internacional" o "Latinoamerica" Y el hecho es una catastrofe de impacto excepcional: desastre climatico (terremoto, inundacion masiva, incendio forestal a escala nacional, tsunami, huracan devastador), crisis financiera sistemica (default de un pais, colapso bancario, crash de mercados), crisis humanitaria grave (guerra con miles de desplazados, hambruna, pandemia), o evento con consecuencias directas para Argentina. Para noticias argentinas o internacionales rutinarias, siempre false.
 
 TITULO ORIGINAL: {title}
 
@@ -129,6 +130,7 @@ TEXTO ORIGINAL:
                             "enum": ["Argentina", "Latinoamerica", "Internacional"],
                         },
                         "ig_relevancia": {"type": "integer"},
+                        "es_catastrofe": {"type": "boolean"},
                     },
                     "required": ["es_publicable"],
                 },
@@ -159,6 +161,7 @@ TEXTO ORIGINAL:
             "categoria": data.get("categoria", "").strip(),
             "region": data.get("region", "Argentina").strip(),
             "ig_relevancia": int(data.get("ig_relevancia", 5)),
+            "es_catastrofe": bool(data.get("es_catastrofe", False)),
         }
 
     except Exception as e:
