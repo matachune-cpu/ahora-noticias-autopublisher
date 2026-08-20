@@ -58,10 +58,11 @@ def create_post(
     original_url: str,
     source_name: str,
     featured_media_id: int = None,
+    sticky: bool = False,
 ) -> str | None:
     """
     Crea un post en WordPress.
-    Retorna el post ID como string o None si falla.
+    Retorna (post_id, post_url) o (None, None) si falla.
     """
     try:
         attribution = (
@@ -74,6 +75,7 @@ def create_post(
             "title": title,
             "content": full_content,
             "status": "publish",
+            "sticky": sticky,
         }
         if featured_media_id:
             payload["featured_media"] = featured_media_id
@@ -93,3 +95,44 @@ def create_post(
     except Exception as e:
         logger.error(f"WordPress create_post error: {e}")
         return None, None
+
+
+def get_sticky_post_ids() -> list[int]:
+    """Retorna los IDs de todos los posts actualmente marcados como sticky."""
+    try:
+        url = f"{config.WP_URL}/wp-json/wp/v2/posts"
+        params = {"sticky": True, "per_page": 20, "status": "publish"}
+        resp = requests.get(url, headers=_auth_header(), params=params, timeout=15)
+        resp.raise_for_status()
+        return [p["id"] for p in resp.json()]
+    except Exception as e:
+        logger.warning(f"WordPress get_sticky_post_ids error: {e}")
+        return []
+
+
+def set_sticky(post_id: int, sticky: bool) -> bool:
+    """Cambia el estado sticky de un post existente."""
+    try:
+        url = f"{config.WP_URL}/wp-json/wp/v2/posts/{post_id}"
+        headers = {**_auth_header(), "Content-Type": "application/json"}
+        resp = requests.post(url, data=json.dumps({"sticky": sticky}), headers=headers, timeout=15)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"WordPress set_sticky({post_id}, {sticky}) error: {e}")
+        return False
+
+
+def rotate_sticky_posts(new_post_ids: list[int], max_sticky: int = 4):
+    """
+    Quita el sticky a los posts actuales y marca como sticky los nuevos IDs.
+    Mantiene hasta max_sticky posts fijados en total.
+    """
+    current = get_sticky_post_ids()
+    for pid in current:
+        set_sticky(pid, False)
+        logger.info(f"WordPress: sticky quitado a post ID={pid}")
+
+    for pid in new_post_ids[:max_sticky]:
+        set_sticky(pid, True)
+        logger.info(f"WordPress: post ID={pid} marcado como destacado (sticky)")

@@ -103,6 +103,7 @@ def run(max_articles: int = 10):
     logger.info(f"Deduplicador: {len(titulos_recientes)} títulos en últimas {DEDUP_HOURS}h")
 
     publicados = 0
+    nuevos_ids = []
 
     for source in config.NEWS_SOURCES:
         if publicados >= max_articles:
@@ -168,6 +169,7 @@ def run(max_articles: int = 10):
                 database.mark_published(url=url, title=title, source=source["name"],
                                         wp_post_id=str(wp_post_id))
                 titulos_recientes.append(title)
+                nuevos_ids.append(int(wp_post_id))
                 publicados += 1
                 provincia = source.get("provincia", "")
                 logger.info(
@@ -181,6 +183,11 @@ def run(max_articles: int = 10):
         time.sleep(2)
 
     logger.info(f"=== Completado: {publicados} publicados ===")
+
+    if nuevos_ids:
+        logger.info(f"Actualizando encabezado: {len(nuevos_ids)} artículo(s) nuevos → sticky (máx 4)")
+        wordpress.rotate_sticky_posts(nuevos_ids, max_sticky=4)
+
     return publicados
 
 
