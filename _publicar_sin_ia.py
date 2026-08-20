@@ -4,8 +4,11 @@ Modo de emergencia cuando Gemini tiene cuota agotada.
 
 Flujo:
   1. Scrapea artículos de todas las fuentes configuradas
-  2. Publica en WP con el texto original limpio (sin reescritura)
-  3. Omite completamente Facebook, Instagram y WhatsApp
+  2. Filtra URLs con segmentos claramente internacionales
+  3. Detecta categoría temática por palabras clave del título
+  4. Publica en WP con categoría asignada y texto original limpio
+  5. Rota los sticky posts del encabezado con los nuevos artículos
+  6. Omite completamente Facebook, Instagram y WhatsApp
 
 Uso:
     python _publicar_sin_ia.py [--max 10]
@@ -45,11 +48,84 @@ MIN_CHARS = 300
 DEDUP_THRESHOLD = 0.45
 DEDUP_HOURS = 12
 
+# Segmentos de URL que indican contenido claramente internacional
+_URL_INTERNACIONAL = (
+    "/el-mundo/", "/mundo/", "/internacional/", "/world/",
+    "/eeuu/", "/usa/", "/trump/", "/biden/",
+    "/europa/", "/asia/", "/africa/",
+    "/america/eeuu", "/america/mexico", "/america/colombia",
+    "/america/venezuela", "/america/brasil", "/america/peru",
+    "/america/chile-", "/america/bolivia", "/america/ecuador",
+    "/america/cuba", "/america/nicaragua", "/america/haiti",
+    "/america/dominicana", "/america/guatemala", "/america/honduras",
+    "/america/salvador", "/america/costa-rica", "/america/panama",
+)
+
+# Detección de categoría por palabras clave en el título (orden de prioridad)
+_CATEGORIAS_KW = [
+    ("Deportes", [
+        "fútbol", "futbol", "gol", "river", "boca", "racing", "independiente",
+        "belgrano", "san lorenzo", "estudiantes", "selección", "mundial",
+        "copa", "torneo", "partido", "jugador", "deporte", "tenis", "basquet",
+        "atletismo", "natación", "ciclismo", "boxeo", "mma", "maratón",
+        "olimp", "nba", "formula 1", "moto gp",
+    ]),
+    ("Economía", [
+        "dólar", "dolar", "inflación", "inflacion", "precio", "mercado",
+        "banco", "economía", "economia", "presupuesto", "inversión", "inversion",
+        "finanzas", "pbi", "reservas", "deuda", "bono", "indec", "canasta",
+        "tarifas", "combustible", "nafta", "sueldo", "salario", "jubilación",
+        "jubilacion", "exportación", "importación", "aduana", "impo", "expo",
+        "bolsa", "acciones", "interés", "interes", "tipo de cambio",
+    ]),
+    ("Política", [
+        "presidente", "gobierno", "congreso", "senado", "diputado", "ministro",
+        "elección", "elecciones", "milei", "kirchner", "peronismo", "peronista",
+        "gobernador", "intendente", "legislatura", "decreto", "ley", "proyecto",
+        "partido", "oposición", "oposicion", "oficialismo", "coalición",
+        "candidato", "cambiemos", "unión por la patria", "la libertad avanza",
+        "pro ", " ucr", "kicillof", "massa", "bullrich", "larreta",
+    ]),
+    ("Seguridad", [
+        "policia", "policía", "crimen", "robo", "homicidio", "narco",
+        "detenido", "preso", "cárcel", "carcel", "asesinato", "accidente",
+        "incendio", "siniestro", "víctima", "victima", "violencia", "femicidio",
+        "secuestro", "extorsión", "banda", "delito", "tráfico", "contrabando",
+        "allanamiento", "operativo", "gendarmería", "prefectura",
+    ]),
+    ("Salud", [
+        "salud", "hospital", "médico", "medico", "enfermedad", "vacuna",
+        "covid", "dengue", "gripe", "pandemia", "tratamiento", "paciente",
+        "cirugía", "cirugia", "cáncer", "cancer", "diabetes", "obesidad",
+        "obra social", "pami", "medicamento", "farmacia", "clínica",
+    ]),
+    ("Cultura", [
+        "cultura", "arte", "cine", "teatro", "música", "musica", "festival",
+        "libro", "exposición", "exposicion", "artista", "recital", "show",
+        "película", "pelicula", "serie", "carnaval", "patrimonio",
+    ]),
+    ("Tecnología", [
+        "tecnología", "tecnologia", "app", "inteligencia artificial", "internet",
+        "digital", "software", "startup", "innovación", "innovacion", "robot",
+        "satélite", "satelite", "ciberseguridad", "hacker", "redes sociales",
+    ]),
+    ("Medio Ambiente", [
+        "clima", "ambiente", "ecología", "ecologia", "inundación", "inundacion",
+        "sequía", "sequia", "contaminación", "contaminacion", "biodiversidad",
+        "energía renovable", "energia renovable", "solar", "eólica", "eolica",
+        "bosque", "incendio forestal", "glaciar", "reciclaje",
+    ]),
+    ("Sociedad", []),  # fallback
+]
+
 _STOPWORDS = {
     "el","la","los","las","un","una","de","del","al","en","con","por","para",
     "que","se","lo","le","y","o","a","es","son","fue","ha","hay","no","si",
     "ya","pero","como","este","esta","ese","esa","todo","cada","nuevo","nueva",
 }
+
+# Cache de IDs de categorías WP para no consultar en cada artículo
+_categoria_id_cache: dict[str, int] = {}
 
 
 def _palabras(titulo: str) -> set:
@@ -68,6 +144,28 @@ def _jaccard(a: str, b: str) -> float:
 
 def _es_duplicado(titulo: str, recientes: list[str]) -> bool:
     return any(_jaccard(titulo, t) >= DEDUP_THRESHOLD for t in recientes)
+
+
+def _es_url_internacional(url: str) -> bool:
+    url_lower = url.lower()
+    return any(seg in url_lower for seg in _URL_INTERNACIONAL)
+
+
+def _detectar_categoria(title: str) -> str:
+    title_lower = title.lower()
+    for categoria, keywords in _CATEGORIAS_KW:
+        if any(kw in title_lower for kw in keywords):
+            return categoria
+    return "Sociedad"
+
+
+def _get_categoria_id(nombre: str) -> int | None:
+    if nombre in _categoria_id_cache:
+        return _categoria_id_cache[nombre]
+    cat_id = wordpress.get_or_create_category(nombre)
+    if cat_id:
+        _categoria_id_cache[nombre] = cat_id
+    return cat_id
 
 
 def _get_og_image(url: str) -> str | None:
@@ -121,6 +219,12 @@ def run(max_articles: int = 10):
 
             if not url or len(title) < 10:
                 continue
+
+            # Filtro: descartar URLs con segmentos internacionales
+            if _es_url_internacional(url):
+                logger.info(f"  [INTL SKIP] {url[:80]}")
+                continue
+
             if database.is_published(url):
                 continue
             if _es_duplicado(title, titulos_recientes):
@@ -150,6 +254,11 @@ def run(max_articles: int = 10):
                 except Exception as e:
                     logger.warning(f"  Imagen no se pudo subir: {e}")
 
+            # Categoría temática detectada por palabras clave
+            categoria_nombre = _detectar_categoria(title)
+            cat_id = _get_categoria_id(categoria_nombre)
+            categories = [cat_id] if cat_id else []
+
             body_html = _build_body_html(article.full_text, source["name"], url)
 
             try:
@@ -159,6 +268,7 @@ def run(max_articles: int = 10):
                     original_url=url,
                     source_name=source["name"],
                     featured_media_id=media_id,
+                    categories=categories,
                 )
             except Exception as e:
                 logger.error(f"  WP error: {e}")
@@ -173,7 +283,7 @@ def run(max_articles: int = 10):
                 publicados += 1
                 provincia = source.get("provincia", "")
                 logger.info(
-                    f"  ✓ [{provincia or 'Nacional'}] {title[:60]} | WP ID={wp_post_id}"
+                    f"  ✓ [{provincia or 'Nacional'}] [{categoria_nombre}] {title[:55]} | WP ID={wp_post_id}"
                 )
             else:
                 database.mark_seen(url, title, source["name"])
