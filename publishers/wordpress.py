@@ -52,6 +52,28 @@ def upload_image(image_path: str = None, filename: str = "foto.jpg", image_url: 
         return None, None
 
 
+def get_or_create_category(name: str) -> int | None:
+    """Retorna el ID de la categoría WP (la crea si no existe)."""
+    try:
+        url = f"{config.WP_URL}/wp-json/wp/v2/categories"
+        # Buscar si ya existe
+        resp = requests.get(url, headers=_auth_header(), params={"search": name, "per_page": 5}, timeout=10)
+        resp.raise_for_status()
+        for cat in resp.json():
+            if cat["name"].lower() == name.lower():
+                return cat["id"]
+        # Crear si no existe
+        headers = {**_auth_header(), "Content-Type": "application/json"}
+        resp = requests.post(url, data=json.dumps({"name": name}), headers=headers, timeout=10)
+        resp.raise_for_status()
+        cat_id = resp.json().get("id")
+        logger.info(f"WordPress: categoría creada '{name}' ID={cat_id}")
+        return cat_id
+    except Exception as e:
+        logger.warning(f"WordPress get_or_create_category('{name}') error: {e}")
+        return None
+
+
 def create_post(
     title: str,
     body_html: str,
@@ -59,6 +81,7 @@ def create_post(
     source_name: str,
     featured_media_id: int = None,
     sticky: bool = False,
+    categories: list = None,
 ) -> str | None:
     """
     Crea un post en WordPress.
@@ -79,6 +102,8 @@ def create_post(
         }
         if featured_media_id:
             payload["featured_media"] = featured_media_id
+        if categories:
+            payload["categories"] = categories
 
         url = f"{config.WP_URL}/wp-json/wp/v2/posts"
         headers = {
