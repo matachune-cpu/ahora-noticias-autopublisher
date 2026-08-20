@@ -48,21 +48,58 @@ MIN_CHARS = 300
 DEDUP_THRESHOLD = 0.45
 DEDUP_HOURS = 12
 
-# Segmentos de URL que indican contenido claramente internacional
+# Segmentos de URL que indican contenido internacional
 _URL_INTERNACIONAL = (
     "/el-mundo/", "/mundo/", "/internacional/", "/world/",
     "/eeuu/", "/usa/", "/trump/", "/biden/",
     "/europa/", "/asia/", "/africa/",
     "/america/eeuu", "/america/mexico", "/america/colombia",
     "/america/venezuela", "/america/brasil", "/america/peru",
-    "/america/chile-", "/america/bolivia", "/america/ecuador",
+    "/america/chile", "/america/bolivia", "/america/ecuador",
     "/america/cuba", "/america/nicaragua", "/america/haiti",
     "/america/dominicana", "/america/guatemala", "/america/honduras",
     "/america/salvador", "/america/costa-rica", "/america/panama",
+    "/america/uruguay", "/america/paraguay",
 )
+
+# Palabras clave en títulos que revelan contenido internacional
+# (cuando la URL no lo deja claro porque viene de diarios nacionales)
+_TITULO_INTERNACIONAL = (
+    "lima", "ciudad de méxico", "ciudad de mexico",
+    "bogotá", "bogota", "santiago de chile", "caracas",
+    "la paz", "quito", "montevideo", "asunción", "asuncion",
+    "río de janeiro", "rio de janeiro", "sao paulo", "brasilia",
+    "nueva york", "new york", "washington", "los ángeles", "los angeles", "miami",
+    "madrid", "barcelona", "paris", "berlín", "berlin", "roma", "londres",
+    "tokio", "tokyo", "beijing", "moscú", "moscu", "tel aviv", "gaza",
+    " méxico ", " mexico ", " perú ", " peru ", " colombia ",
+    " bolivia ", " ecuador ", " venezuela ", " brasil ", " brazil ",
+    " cuba ", " uruguay ", " paraguay ", " chile ", " panamá ", " panama ",
+    " guatemala ", " honduras ", " nicaragua ", " haití ", " haiti ",
+    " españa ", " espana ", " francia ", " alemania ", " italia ",
+    " china ", " rusia ", " ucrania ", " israel ",
+    "estados unidos", "eeuu", "trump", "biden", "harris",
+    "gobierno de méxico", "gobierno de chile", "gobierno de colombia",
+    "presidente de méxico", "presidente de brasil", "presidente de chile",
+)
+
+# Categorías donde se permite contenido internacional (espectáculos y tecnología)
+_CATEGORIAS_INTL_PERMITIDAS = {"Espectáculos", "Tecnología"}
 
 # Detección de categoría por palabras clave en el título (orden de prioridad)
 _CATEGORIAS_KW = [
+    ("Espectáculos", [
+        "actor", "actriz", "cantante", "celebridad", "famoso", "famosa",
+        "telenovela", "reality", "gran hermano", "got talent", "masterchef",
+        "grammy", "oscar", "emmy", "golden globe", "alfombra roja",
+        "netflix", "disney", "amazon prime", "hbo", "star plus",
+        "farándula", "farandula", "escándalo", "ruptura", "separación",
+        "boda", "embarazo", "influencer", "youtuber", "tiktoker",
+        "taylor swift", "bad bunny", "shakira", "daddy yankee",
+        "ricky martin", "j balvin", "maluma", "karol g",
+        "wanda nara", "pampita", "marcelo tinelli", "susana giménez",
+        "mirtha legrand", "julio iglesias", "madonna",
+    ]),
     ("Deportes", [
         "fútbol", "futbol", "gol", "river", "boca", "racing", "independiente",
         "belgrano", "san lorenzo", "estudiantes", "selección", "mundial",
@@ -159,9 +196,13 @@ def _es_duplicado(titulo: str, recientes: list[str]) -> bool:
     return any(_jaccard(titulo, t) >= DEDUP_THRESHOLD for t in recientes)
 
 
-def _es_url_internacional(url: str) -> bool:
+def _es_internacional(url: str, title: str) -> bool:
+    """Detecta contenido internacional por URL o por palabras clave en el título."""
     url_lower = url.lower()
-    return any(seg in url_lower for seg in _URL_INTERNACIONAL)
+    if any(seg in url_lower for seg in _URL_INTERNACIONAL):
+        return True
+    title_lower = f" {title.lower()} "
+    return any(kw in title_lower for kw in _TITULO_INTERNACIONAL)
 
 
 def _detectar_categoria(title: str) -> str:
@@ -233,10 +274,15 @@ def run(max_articles: int = 10):
             if not url or len(title) < 10:
                 continue
 
-            # Filtro: descartar URLs con segmentos internacionales
-            if _es_url_internacional(url):
-                logger.info(f"  [INTL SKIP] {url[:80]}")
-                continue
+            # Filtro internacional: detectar por URL + palabras clave en título
+            if _es_internacional(url, title):
+                # Detectar categoría antes de decidir si descartar
+                cat_temp = _detectar_categoria(title)
+                if cat_temp not in _CATEGORIAS_INTL_PERMITIDAS:
+                    logger.info(f"  [INTL BLOCK] [{cat_temp}] {title[:55]}")
+                    database.mark_seen(url, title, source["name"])
+                    continue
+                logger.info(f"  [INTL OK] [{cat_temp}] {title[:55]}")
 
             if database.is_published(url):
                 continue
