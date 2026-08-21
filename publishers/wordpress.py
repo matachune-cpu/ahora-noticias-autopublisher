@@ -122,6 +122,32 @@ def create_post(
         return None, None
 
 
+def get_posts_by_category(category_id: int, per_page: int = 20) -> list[dict]:
+    """Retorna posts de una categoría ordenados por fecha desc."""
+    try:
+        url = f"{config.WP_URL}/wp-json/wp/v2/posts"
+        params = {"categories": category_id, "per_page": per_page, "orderby": "date", "order": "desc", "status": "publish"}
+        resp = requests.get(url, headers=_auth_header(), params=params, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.warning(f"WordPress get_posts_by_category({category_id}) error: {e}")
+        return []
+
+
+def delete_post(post_id: int) -> bool:
+    """Elimina un post de WordPress (lo mueve a papelera)."""
+    try:
+        url = f"{config.WP_URL}/wp-json/wp/v2/posts/{post_id}"
+        resp = requests.delete(url, headers=_auth_header(), params={"force": True}, timeout=15)
+        resp.raise_for_status()
+        logger.info(f"WordPress: post ID={post_id} eliminado")
+        return True
+    except Exception as e:
+        logger.warning(f"WordPress delete_post({post_id}) error: {e}")
+        return False
+
+
 def get_sticky_post_ids() -> list[int]:
     """Retorna los IDs de todos los posts actualmente marcados como sticky."""
     try:
