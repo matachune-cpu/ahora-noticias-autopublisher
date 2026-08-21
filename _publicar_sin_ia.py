@@ -47,7 +47,13 @@ HEADERS = {
 MIN_CHARS = 300
 DEDUP_THRESHOLD = 0.45
 DEDUP_HOURS = 12
-MAX_POR_PROVINCIA = 1  # máximo artículos por provincia por tanda
+MAX_POR_PROVINCIA = 1  # máximo artículos por provincia por tanda (resto del país)
+
+# Santiago del Estero es la base del medio — tiene cupo propio más alto
+# Como Cadena 3 para Córdoba o La Gaceta para Tucumán: cobertura local intensa
+_LIMITE_POR_PROVINCIA = {
+    "Santiago del Estero": 4,  # 4 fuentes locales, todas deben poder publicar
+}
 
 # Segmentos de URL que indican contenido internacional
 _URL_INTERNACIONAL = (
@@ -397,8 +403,9 @@ def run(max_articles: int = 10):
             break
 
         provincia = source.get("provincia", "")
-        if provincia and provincia_count.get(provincia, 0) >= MAX_POR_PROVINCIA:
-            logger.info(f"  [PROV LIMIT] {provincia}: ya publicado 1 artículo esta tanda, saltando")
+        limite_prov = _LIMITE_POR_PROVINCIA.get(provincia, MAX_POR_PROVINCIA)
+        if provincia and provincia_count.get(provincia, 0) >= limite_prov:
+            logger.info(f"  [PROV LIMIT] {provincia}: ya publicado {limite_prov} artículo(s) esta tanda, saltando")
             continue
 
         logger.info(f"Fuente: {source['name']}")
