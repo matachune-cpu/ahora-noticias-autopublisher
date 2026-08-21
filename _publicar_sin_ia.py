@@ -252,7 +252,8 @@ _INSTITUCIONES = [
 def _titulo_con_provincia(title: str, provincia: str) -> str:
     """
     Integra la provincia con variedad de estilos periodísticos.
-    Nunca siempre al principio: rota entre distintas estrategias.
+    Prioridad: institución adjetivada > verbo pasado > gentilicio > al final.
+    "En [Provincia]," al principio es el último recurso, no el default.
     """
     import random
     if not provincia or provincia in _PROVINCIAS_SIN_PREFIJO:
@@ -266,11 +267,7 @@ def _titulo_con_provincia(title: str, provincia: str) -> str:
 
     opciones = []
 
-    # Estrategia A: verbo en pasado → provincia al final natural
-    if any(primera.endswith(e.strip()) for e in _VERB_ENDINGS):
-        opciones.append(f"{title} en {provincia}")
-
-    # Estrategia B: institución → adjetivo provincial embebido
+    # Prioridad 1: institución adjetivada — más natural y específico
     if adj:
         for patron, reemplazo in _INSTITUCIONES:
             if patron in title_lower:
@@ -279,15 +276,20 @@ def _titulo_con_provincia(title: str, provincia: str) -> str:
                 opciones.append(adjetivado)
                 break
 
-    # Estrategia C: gentilicio como sujeto si el título empieza con "Los/Las"
+    # Prioridad 2: verbo en pasado → provincia al final
+    if any(primera.endswith(e.strip()) for e in _VERB_ENDINGS):
+        opciones.append(f"{title} en {provincia}")
+
+    # Prioridad 3: gentilicio como sujeto si arranca con "Los/Las"
     if dem and title_lower.startswith(("los ", "las ")):
         opciones.append(f"Los {dem} {title_lower[4:]}")
 
-    # Estrategia D: clásico "En [Provincia], [título]"
-    opciones.append(f"En {provincia}, {resto}")
-
-    # Estrategia E: al final con coma
+    # Siempre disponible: al final con coma (preferido sobre "En Prov,")
     opciones.append(f"{title}, en {provincia}")
+
+    # "En [Provincia], [título]" solo cuando hay una sola opción (sin alternativas)
+    if len(opciones) == 1:
+        opciones.append(f"En {provincia}, {resto}")
 
     return random.choice(opciones)
 
@@ -413,6 +415,10 @@ def run(max_articles: int = 10):
 
         for entry in entries:
             if publicados >= max_articles:
+                break
+
+            # Re-verificar límite de provincia dentro del loop de entradas
+            if provincia and provincia_count.get(provincia, 0) >= limite_prov:
                 break
 
             url = entry.get("url", "").strip()
