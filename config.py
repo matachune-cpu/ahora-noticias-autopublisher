@@ -136,10 +136,10 @@ NEWS_SOURCES = [
     {
         "name": "Cadena 3",
         "rss": None,
-        "url": "https://www.cadena3.com",
+        "url": "https://www.cadena3.com/cordoba",
         "scrape_links": True,
         "article_selector": "a[href*='/noticia/']",
-        "max_articles": 2,
+        "max_articles": 3,
         "provincia": "Córdoba",
     },
 

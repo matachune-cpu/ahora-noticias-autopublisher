@@ -452,9 +452,9 @@ def run(max_articles: int = 10):
             summary = entry.get("summary", "")
 
             # Filtro 1 — dominio: solo acepta artículos de dominios .ar
-            # Esto bloquea estructuralmente Infobae, Clarín, Ámbito, El Cronista y cualquier
-            # fuente extranjera que retransmitan, sin necesidad de keywords.
-            if not _es_dominio_argentino(url):
+            # Fuentes con "provincia" en config están pre-aprobadas como argentinas (ej: cadena3.com).
+            # Solo aplica a fuentes nacionales sin provincia, que pueden retransmitir contenido extranjero.
+            if not provincia and not _es_dominio_argentino(url):
                 cat_temp = _detectar_categoria(title)
                 if cat_temp not in _CATEGORIAS_INTL_PERMITIDAS:
                     logger.info(
