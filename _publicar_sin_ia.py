@@ -66,22 +66,34 @@ _URL_INTERNACIONAL = (
 # Palabras clave en títulos que revelan contenido internacional
 # (cuando la URL no lo deja claro porque viene de diarios nacionales)
 _TITULO_INTERNACIONAL = (
+    # Latinoamérica — ciudades y países
     "lima", "ciudad de méxico", "ciudad de mexico",
     "bogotá", "bogota", "santiago de chile", "caracas",
     "la paz", "quito", "montevideo", "asunción", "asuncion",
     "río de janeiro", "rio de janeiro", "sao paulo", "brasilia",
-    "nueva york", "new york", "washington", "los ángeles", "los angeles", "miami",
-    "madrid", "barcelona", "paris", "berlín", "berlin", "roma", "londres",
-    "tokio", "tokyo", "beijing", "moscú", "moscu", "tel aviv", "gaza",
     " méxico ", " mexico ", " perú ", " peru ", " colombia ",
     " bolivia ", " ecuador ", " venezuela ", " brasil ", " brazil ",
     " cuba ", " uruguay ", " paraguay ", " chile ", " panamá ", " panama ",
     " guatemala ", " honduras ", " nicaragua ", " haití ", " haiti ",
-    " españa ", " espana ", " francia ", " alemania ", " italia ",
-    " china ", " rusia ", " ucrania ", " israel ",
-    "estados unidos", "eeuu", "trump", "biden", "harris",
     "gobierno de méxico", "gobierno de chile", "gobierno de colombia",
     "presidente de méxico", "presidente de brasil", "presidente de chile",
+    # España — política, ciudades, partidos
+    "madrid", "barcelona", "ceuta", "melilla", "sevilla", "valencia",
+    "cataluña", "cataluna", "catalán", "catalan", "euskadi", "país vasco",
+    "pedro sánchez", "pedro sanchez", "sánchez avisa", "sanchez avisa",
+    "partido popular", "partido socialista", " psoe", " pp avisa", " pp pide",
+    " vox ", "ciudadanos ", "podemos ", "sumar ",
+    "congreso de los diputados", "senado español", "gobierno español",
+    "gobierno de españa", "gobierno de espana", " españa ", " espana ",
+    "generalitat", "comunidad de madrid",
+    # Resto de Europa y mundo
+    "paris", "berlín", "berlin", "roma", "londres", "bruselas",
+    "tokio", "tokyo", "beijing", "moscú", "moscu", "tel aviv", "gaza",
+    " francia ", " alemania ", " italia ", " china ", " rusia ",
+    " ucrania ", " israel ", " turquía ", " turquia ",
+    "nueva york", "new york", "washington", "los ángeles", "los angeles", "miami",
+    # EEUU — políticos
+    "estados unidos", "eeuu", "trump", "biden", "harris", "casa blanca",
 )
 
 # Categorías donde se permite contenido internacional (espectáculos y tecnología)
