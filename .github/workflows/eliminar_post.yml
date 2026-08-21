@@ -5,7 +5,11 @@ on:
     inputs:
       slug:
         description: 'Slug del post (parte final de la URL de WordPress)'
-        required: true
+        required: false
+        type: string
+      id:
+        description: 'ID numérico del post en WordPress'
+        required: false
         type: string
 
 jobs:
@@ -40,4 +44,9 @@ jobs:
           EOF
 
       - name: Eliminar post
-        run: python _eliminar_post.py --slug "${{ github.event.inputs.slug }}"
+        run: |
+          if [ -n "${{ github.event.inputs.id }}" ]; then
+            python _eliminar_post.py --id ${{ github.event.inputs.id }}
+          else
+            python _eliminar_post.py --slug "${{ github.event.inputs.slug }}"
+          fi
