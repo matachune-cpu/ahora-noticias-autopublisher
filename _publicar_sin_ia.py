@@ -19,6 +19,7 @@ import re
 import time
 import unicodedata
 from datetime import datetime
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -327,6 +328,22 @@ def _es_duplicado(titulo: str, recientes: list[str]) -> bool:
     return any(_jaccard(titulo, t) >= DEDUP_THRESHOLD for t in recientes)
 
 
+def _es_dominio_argentino(url: str) -> bool:
+    """
+    Garantía estructural: solo acepta artículos alojados en dominios .ar.
+    Bloquea Infobae (.com), Clarín (.com), Ámbito (.com), El Cronista (.com),
+    y cualquier fuente extranjera que RSS nacionales retransmitan.
+    Fuentes provinciales (elliberal.com.ar, eltucumano.com.ar, etc.) siempre pasan.
+    """
+    try:
+        host = urlparse(url).netloc.lower()
+        # Eliminar puerto si existe
+        host = host.split(":")[0]
+        return host.endswith(".ar")
+    except Exception:
+        return False
+
+
 def _es_internacional(url: str, title: str, summary: str = "") -> bool:
     """Detecta contenido internacional por URL, título o resumen de agencia EFE."""
     url_lower = url.lower()
@@ -434,7 +451,20 @@ def run(max_articles: int = 10):
 
             summary = entry.get("summary", "")
 
-            # Filtro internacional: URL + palabras clave en título + agencia EFE
+            # Filtro 1 — dominio: solo acepta artículos de dominios .ar
+            # Esto bloquea estructuralmente Infobae, Clarín, Ámbito, El Cronista y cualquier
+            # fuente extranjera que retransmitan, sin necesidad de keywords.
+            if not _es_dominio_argentino(url):
+                cat_temp = _detectar_categoria(title)
+                if cat_temp not in _CATEGORIAS_INTL_PERMITIDAS:
+                    logger.info(
+                        f"  [DOMINIO BLOCK] {urlparse(url).netloc} → {title[:50]}"
+                    )
+                    database.mark_seen(url, title, source["name"])
+                    continue
+                logger.info(f"  [DOMINIO OK-INTL] [{cat_temp}] {urlparse(url).netloc} → {title[:50]}")
+
+            # Filtro 2 — contenido: URL + palabras clave en título + agencia EFE
             if _es_internacional(url, title, summary):
                 cat_temp = _detectar_categoria(title)
                 if cat_temp not in _CATEGORIAS_INTL_PERMITIDAS:
