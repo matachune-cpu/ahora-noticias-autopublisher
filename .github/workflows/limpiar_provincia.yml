@@ -1,0 +1,48 @@
+name: Limpiar exceso de noticias por provincia
+
+on:
+  workflow_dispatch:
+    inputs:
+      provincia:
+        description: 'Nombre de la provincia a limpiar (ej: Chaco)'
+        required: true
+        type: string
+      max_keep:
+        description: 'Artículos a conservar por provincia'
+        required: false
+        default: '1'
+        type: string
+
+jobs:
+  limpiar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          EOF
+
+      - name: Limpiar exceso de provincia
+        run: python _limpiar_exceso_provincia.py --provincia "${{ github.event.inputs.provincia }}" --max-keep ${{ github.event.inputs.max_keep || '1' }}

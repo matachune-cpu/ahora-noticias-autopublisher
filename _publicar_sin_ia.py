@@ -47,6 +47,7 @@ HEADERS = {
 MIN_CHARS = 300
 DEDUP_THRESHOLD = 0.45
 DEDUP_HOURS = 12
+MAX_POR_PROVINCIA = 1  # máximo artículos por provincia por tanda
 
 # Segmentos de URL que indican contenido internacional
 _URL_INTERNACIONAL = (
@@ -256,10 +257,16 @@ def run(max_articles: int = 10):
 
     publicados = 0
     nuevos_ids = []
+    provincia_count: dict[str, int] = {}  # artículos publicados por provincia esta tanda
 
     for source in config.NEWS_SOURCES:
         if publicados >= max_articles:
             break
+
+        provincia = source.get("provincia", "")
+        if provincia and provincia_count.get(provincia, 0) >= MAX_POR_PROVINCIA:
+            logger.info(f"  [PROV LIMIT] {provincia}: ya publicado 1 artículo esta tanda, saltando")
+            continue
 
         logger.info(f"Fuente: {source['name']}")
         entries = fetch_entries(source, max_items=source.get("max_articles", 5))
@@ -313,13 +320,15 @@ def run(max_articles: int = 10):
                 except Exception as e:
                     logger.warning(f"  Imagen no se pudo subir: {e}")
 
-            # Categoría temática detectada por palabras clave
-            categoria_nombre = _detectar_categoria(title)
+            # Categoría: nombre de provincia para fuentes locales; tema para nacionales
+            if provincia:
+                categoria_nombre = provincia
+            else:
+                categoria_nombre = _detectar_categoria(title)
             cat_id = _get_categoria_id(categoria_nombre)
             categories = [cat_id] if cat_id else []
 
             # Título con provincia integrada en redacción natural
-            provincia = source.get("provincia", "")
             titulo_final = _titulo_con_provincia(title, provincia)
 
             body_html = _build_body_html(article.full_text, source["name"], url)
@@ -344,6 +353,8 @@ def run(max_articles: int = 10):
                 titulos_recientes.append(title)
                 nuevos_ids.append(int(wp_post_id))
                 publicados += 1
+                if provincia:
+                    provincia_count[provincia] = provincia_count.get(provincia, 0) + 1
                 logger.info(
                     f"  ✓ [{provincia or 'Nacional'}] [{categoria_nombre}] {titulo_final[:60]} | WP ID={wp_post_id}"
                 )
