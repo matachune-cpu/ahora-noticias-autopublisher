@@ -190,17 +190,100 @@ _CATEGORIAS_KW = [
     ("Sociedad", []),  # fallback
 ]
 
-# Santiago del Estero es la base del sitio, no necesita prefijo de provincia
+# Santiago del Estero es la base del sitio, no necesita prefijo
 _PROVINCIAS_SIN_PREFIJO = {"Santiago del Estero"}
+
+# Gentilicio plural para usar como sujeto: "Los cordobeses exigen..."
+_DEMONYMOS = {
+    "Buenos Aires": "bonaerenses", "CABA": "porteños",
+    "Córdoba": "cordobeses", "Mendoza": "mendocinos",
+    "Santa Fe": "santafesinos", "Tucumán": "tucumanos",
+    "Salta": "salteños", "Jujuy": "jujeños",
+    "Misiones": "misioneros", "Chaco": "chaqueños",
+    "Corrientes": "correntinos", "Entre Ríos": "entrerrianos",
+    "Formosa": "formoseños", "La Rioja": "riojanos",
+    "Catamarca": "catamarqueños", "San Juan": "sanjuaninos",
+    "San Luis": "puntanos", "Neuquén": "neuquinos",
+    "Río Negro": "rionegrinos", "Chubut": "chubutenses",
+    "Santa Cruz": "santacruceños", "Tierra del Fuego": "fueguinos",
+    "La Pampa": "pampeanos",
+}
+
+# Adjetivo para instituciones: "la justicia cordobesa", "la policía chaqueña"
+_ADJETIVOS = {
+    "Buenos Aires": "bonaerense", "CABA": "porteño",
+    "Córdoba": "cordobés", "Mendoza": "mendocino",
+    "Santa Fe": "santafesino", "Tucumán": "tucumano",
+    "Salta": "salteño", "Jujuy": "jujeño",
+    "Misiones": "misionero", "Chaco": "chaqueño",
+    "Corrientes": "correntino", "Entre Ríos": "entrerriano",
+    "Formosa": "formoseño", "La Rioja": "riojano",
+    "Catamarca": "catamarqueño", "San Juan": "sanjuanino",
+    "San Luis": "puntano", "Neuquén": "neuquino",
+    "Río Negro": "rionegrino", "Chubut": "chubutense",
+    "Santa Cruz": "santacruceño", "Tierra del Fuego": "fueguino",
+    "La Pampa": "pampeano",
+}
+
+# Terminaciones de verbos en pasado: si el título arranca con uno → provincia va al final
+_VERB_ENDINGS = ("aron", "ieron", "echaron", "allaron", "ó ", "ió ", "uyeron",
+                 "uvieron", "jeron", "ieron", "etuvieron")
+
+# Instituciones que se pueden adjetivar con el gentilicio provincial
+_INSTITUCIONES = [
+    ("la justicia", "la justicia {adj}"),
+    ("el gobierno", "el gobierno {adj}"),
+    ("la policía", "la policía {adj}"),
+    ("la policia", "la policía {adj}"),
+    ("el municipio", "el municipio {adj}"),
+    ("el tribunal", "el tribunal {adj}"),
+    ("el hospital", "el hospital {adj}"),
+    ("la legislatura", "la legislatura {adj}"),
+    ("el ministerio", "el ministerio {adj}"),
+]
 
 
 def _titulo_con_provincia(title: str, provincia: str) -> str:
-    """Integra la provincia en el título de forma natural en redacción periodística."""
+    """
+    Integra la provincia con variedad de estilos periodísticos.
+    Nunca siempre al principio: rota entre distintas estrategias.
+    """
+    import random
     if not provincia or provincia in _PROVINCIAS_SIN_PREFIJO:
         return title
-    # Bajar la primera letra para que la oración fluya naturalmente
-    resto = title[0].lower() + title[1:] if title and title[0].isupper() else title
-    return f"En {provincia}, {resto}"
+
+    adj = _ADJETIVOS.get(provincia, "")
+    dem = _DEMONYMOS.get(provincia, "")
+    title_lower = title.lower()
+    primera = title_lower.split()[0] if title_lower.split() else ""
+    resto = title[0].lower() + title[1:] if title[0].isupper() else title
+
+    opciones = []
+
+    # Estrategia A: verbo en pasado → provincia al final natural
+    if any(primera.endswith(e.strip()) for e in _VERB_ENDINGS):
+        opciones.append(f"{title} en {provincia}")
+
+    # Estrategia B: institución → adjetivo provincial embebido
+    if adj:
+        for patron, reemplazo in _INSTITUCIONES:
+            if patron in title_lower:
+                idx = title_lower.index(patron)
+                adjetivado = title[:idx] + reemplazo.format(adj=adj) + title[idx + len(patron):]
+                opciones.append(adjetivado)
+                break
+
+    # Estrategia C: gentilicio como sujeto si el título empieza con "Los/Las"
+    if dem and title_lower.startswith(("los ", "las ")):
+        opciones.append(f"Los {dem} {title_lower[4:]}")
+
+    # Estrategia D: clásico "En [Provincia], [título]"
+    opciones.append(f"En {provincia}, {resto}")
+
+    # Estrategia E: al final con coma
+    opciones.append(f"{title}, en {provincia}")
+
+    return random.choice(opciones)
 
 
 _STOPWORDS = {
