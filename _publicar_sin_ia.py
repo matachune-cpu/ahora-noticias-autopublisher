@@ -82,10 +82,15 @@ _TITULO_INTERNACIONAL = (
     " guatemala ", " honduras ", " nicaragua ", " haití ", " haiti ",
     "gobierno de méxico", "gobierno de chile", "gobierno de colombia",
     "presidente de méxico", "presidente de brasil", "presidente de chile",
-    # España — política, partidos, ciudades
+    # España — política, partidos, ciudades y regiones
     " españa ", " espana ", "madrid", "barcelona", "ceuta", "melilla",
     "sevilla", "valencia", "bilbao", "zaragoza", "paterna",
-    "cataluña", "cataluna", "euskadi", "país vasco",
+    "salamanca", "huesca", "cáceres", "caceres", "las hurdes",
+    "valladolid", "murcia", "alicante", "granada", "toledo",
+    "burgos", "albacete", "badajoz", "huelva", "jaén", "jaen",
+    "cataluña", "cataluna", "euskadi", "país vasco", "galicia",
+    "asturias", "cantabria", "navarra", "andalucía", "andalucia",
+    "castilla", "extremadura", "aragón", "aragon", "canarias",
     "pedro sánchez", "pedro sanchez", "partido popular", "partido socialista",
     " psoe", " pp avisa", " pp pide", " vox ", "podemos ", "sumar ",
     "congreso de los diputados", "gobierno español", "gobierno de españa",
