@@ -64,7 +64,6 @@ _URL_INTERNACIONAL = (
 )
 
 # Palabras clave en títulos que revelan contenido internacional
-# (cuando la URL no lo deja claro porque viene de diarios nacionales)
 _TITULO_INTERNACIONAL = (
     # Latinoamérica — ciudades y países
     "lima", "ciudad de méxico", "ciudad de mexico",
@@ -77,27 +76,50 @@ _TITULO_INTERNACIONAL = (
     " guatemala ", " honduras ", " nicaragua ", " haití ", " haiti ",
     "gobierno de méxico", "gobierno de chile", "gobierno de colombia",
     "presidente de méxico", "presidente de brasil", "presidente de chile",
-    # España — política, ciudades, partidos
-    "madrid", "barcelona", "ceuta", "melilla", "sevilla", "valencia",
-    "cataluña", "cataluna", "catalán", "catalan", "euskadi", "país vasco",
-    "pedro sánchez", "pedro sanchez", "sánchez avisa", "sanchez avisa",
-    "partido popular", "partido socialista", " psoe", " pp avisa", " pp pide",
-    " vox ", "ciudadanos ", "podemos ", "sumar ",
-    "congreso de los diputados", "senado español", "gobierno español",
-    "gobierno de españa", "gobierno de espana", " españa ", " espana ",
+    # España — política, partidos, ciudades
+    " españa ", " espana ", "madrid", "barcelona", "ceuta", "melilla",
+    "sevilla", "valencia", "bilbao", "zaragoza", "paterna",
+    "cataluña", "cataluna", "euskadi", "país vasco",
+    "pedro sánchez", "pedro sanchez", "partido popular", "partido socialista",
+    " psoe", " pp avisa", " pp pide", " vox ", "podemos ", "sumar ",
+    "congreso de los diputados", "gobierno español", "gobierno de españa",
     "generalitat", "comunidad de madrid",
+    # Fútbol y deportes europeos/españoles
+    "real madrid", "atlético de madrid", "atletico de madrid",
+    "fc barcelona", "athletic bilbao", "real betis", "sevilla fc",
+    "valencia cf", "villarreal", "osasuna", "getafe", "espanyol",
+    "corberán", "corberan", "ancelotti", "flick ", "simeone",
+    # F1 — pilotos y equipos europeos (sin contexto argentino)
+    "sainz", "albon", "williams f1", "ferrari f1", "red bull f1",
+    "norris", "piastri", "verstappen", "leclerc", "russell ",
     # Resto de Europa y mundo
     "paris", "berlín", "berlin", "roma", "londres", "bruselas",
     "tokio", "tokyo", "beijing", "moscú", "moscu", "tel aviv", "gaza",
     " francia ", " alemania ", " italia ", " china ", " rusia ",
     " ucrania ", " israel ", " turquía ", " turquia ",
     "nueva york", "new york", "washington", "los ángeles", "los angeles", "miami",
-    # EEUU — políticos
+    # EEUU
     "estados unidos", "eeuu", "trump", "biden", "harris", "casa blanca",
 )
 
-# Categorías donde se permite contenido internacional (espectáculos y tecnología)
+# Si el resumen contiene "(EFE).-" y no menciona Argentina → internacional
+_ARGENTINA_MENTIONS = (
+    "argentina", "buenos aires", "córdoba", "mendoza", "rosario",
+    "santiago del estero", "tucumán", "salta", "jujuy", "neuquén",
+    "corrientes", "chaco", "misiones", "entre ríos", "santa fe",
+    "la pampa", "san juan", "san luis", "río negro", "chubut",
+    "santa cruz", "tierra del fuego", "formosa", "catamarca", "la rioja",
+)
+
+# Categorías donde se permite contenido internacional
 _CATEGORIAS_INTL_PERMITIDAS = {"Espectáculos", "Tecnología"}
+
+# Señales en URLs de imágenes que indican que es un logo genérico y no una foto
+_LOGO_URL_SIGNALS = (
+    "logo", "default-image", "placeholder", "no-image", "noimage",
+    "default_image", "favicon", "apple-touch", "og-default", "share-default",
+    "brand/", "/brand-", "watermark",
+)
 
 # Detección de categoría por palabras clave en el título (orden de prioridad)
 _CATEGORIAS_KW = [
@@ -209,13 +231,29 @@ def _es_duplicado(titulo: str, recientes: list[str]) -> bool:
     return any(_jaccard(titulo, t) >= DEDUP_THRESHOLD for t in recientes)
 
 
-def _es_internacional(url: str, title: str) -> bool:
-    """Detecta contenido internacional por URL o por palabras clave en el título."""
+def _es_internacional(url: str, title: str, summary: str = "") -> bool:
+    """Detecta contenido internacional por URL, título o resumen de agencia EFE."""
     url_lower = url.lower()
     if any(seg in url_lower for seg in _URL_INTERNACIONAL):
         return True
     title_lower = f" {title.lower()} "
-    return any(kw in title_lower for kw in _TITULO_INTERNACIONAL)
+    if any(kw in title_lower for kw in _TITULO_INTERNACIONAL):
+        return True
+    # Agencia EFE (española): si el resumen contiene (EFE) y no menciona Argentina
+    summary_lower = summary.lower()
+    if "(efe)" in summary_lower:
+        combined = title_lower + " " + summary_lower
+        if not any(arg in combined for arg in _ARGENTINA_MENTIONS):
+            return True
+    return False
+
+
+def _imagen_es_logo(url: str) -> bool:
+    """Detecta si la URL de la imagen es un logo genérico del medio."""
+    if not url:
+        return True
+    url_lower = url.lower()
+    return any(s in url_lower for s in _LOGO_URL_SIGNALS)
 
 
 def _detectar_categoria(title: str) -> str:
@@ -293,9 +331,10 @@ def run(max_articles: int = 10):
             if not url or len(title) < 10:
                 continue
 
-            # Filtro internacional: detectar por URL + palabras clave en título
-            if _es_internacional(url, title):
-                # Detectar categoría antes de decidir si descartar
+            summary = entry.get("summary", "")
+
+            # Filtro internacional: URL + palabras clave en título + agencia EFE
+            if _es_internacional(url, title, summary):
                 cat_temp = _detectar_categoria(title)
                 if cat_temp not in _CATEGORIAS_INTL_PERMITIDAS:
                     logger.info(f"  [INTL BLOCK] [{cat_temp}] {title[:55]}")
@@ -311,7 +350,7 @@ def run(max_articles: int = 10):
                 continue
 
             article = extract_article(
-                url, source["name"], title, entry.get("summary", ""),
+                url, source["name"], title, summary,
                 full_text=entry.get("full_text"),
                 image_url=entry.get("image_url"),
             )
@@ -319,8 +358,11 @@ def run(max_articles: int = 10):
                 database.mark_seen(url, title, source["name"])
                 continue
 
-            # Imagen: usar la del artículo o buscar og:image directamente
+            # Imagen: usar la del artículo o buscar og:image, descartando logos
             image_url = article.image_url or _get_og_image(url)
+            if _imagen_es_logo(image_url):
+                logger.info(f"  Imagen descartada (logo genérico): {(image_url or '')[:60]}")
+                image_url = None
 
             media_id = None
             if image_url:
