@@ -52,8 +52,26 @@ def eliminar_por_slug(slug: str):
             logger.error(f"✗ Error {del_resp.status_code} al eliminar ID={pid}")
 
 
+def eliminar_por_id(post_id: int):
+    del_resp = requests.delete(
+        f"{config.WP_URL}/wp-json/wp/v2/posts/{post_id}",
+        headers=_auth_header(),
+        params={"force": True},
+        timeout=15,
+    )
+    if del_resp.status_code in (200, 204):
+        logger.info(f"✓ Eliminado ID={post_id}")
+    else:
+        logger.error(f"✗ Error {del_resp.status_code} al eliminar ID={post_id}: {del_resp.text[:200]}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--slug", required=True, help="Slug del post (parte final de la URL)")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--slug", help="Slug del post (parte final de la URL)")
+    group.add_argument("--id", type=int, help="ID numérico del post en WordPress")
     args = parser.parse_args()
-    eliminar_por_slug(args.slug)
+    if args.slug:
+        eliminar_por_slug(args.slug)
+    else:
+        eliminar_por_id(args.id)
