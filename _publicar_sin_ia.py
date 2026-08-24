@@ -114,17 +114,37 @@ _TITULO_INTERNACIONAL = (
     "estados unidos", "eeuu", "trump", "biden", "harris", "casa blanca",
 )
 
-# Si el resumen contiene "(EFE).-" y no menciona Argentina → internacional
+# Referencias que confirman contenido argentino (provincias + instituciones + términos propios)
 _ARGENTINA_MENTIONS = (
+    # Provincias y ciudades
     "argentina", "buenos aires", "córdoba", "mendoza", "rosario",
     "santiago del estero", "tucumán", "salta", "jujuy", "neuquén",
     "corrientes", "chaco", "misiones", "entre ríos", "santa fe",
     "la pampa", "san juan", "san luis", "río negro", "chubut",
     "santa cruz", "tierra del fuego", "formosa", "catamarca", "la rioja",
+    "caba", "capital federal", "patagonia", "noa", "cuyo", "litoral",
+    # Política y gobierno argentino
+    "milei", "kirchner", "massa", "bullrich", "kicillof", "larreta",
+    "casa rosada", "oficialismo", "peronismo", "kirchnerismo",
+    "congreso nacional", "senado argentino", "diputados argentinos",
+    "gobierno argentino", "gobierno nacional", "gobierno de argentina",
+    "poder ejecutivo", "poder judicial argentino",
+    # Economía y moneda argentina
+    "peso argentino", "pesos argentinos", "dólar blue", "dolar blue",
+    "indec", "anses", "afip", "arca", "banco central", "bcra",
+    "canasta básica", "cepo cambiario", "tipo de cambio argentino",
+    # Instituciones y medios argentinos
+    "telam", "conicet", "inta", "inti", "ypf", "aerolíneas",
+    "infobae", "clarin", "la nacion", "pagina 12",
+    # Gentilicios
+    "argentino", "argentina", "porteño", "porteña", "bonaerense",
 )
 
 # Categorías donde se permite contenido internacional
 _CATEGORIAS_INTL_PERMITIDAS = {"Espectáculos", "Tecnología"}
+
+# Tecnología tiene cupo máximo del 15% del total de artículos publicados
+_CUOTA_TECNOLOGIA = 0.15
 
 # Señales en URLs de imágenes que indican que es un logo genérico y no una foto
 _LOGO_URL_SIGNALS = (
@@ -352,6 +372,21 @@ def _es_duplicado(titulo: str, recientes: list[str]) -> bool:
     return any(_jaccard(titulo, t) >= DEDUP_THRESHOLD for t in recientes)
 
 
+def _menciona_argentina(title: str, url: str, summary: str) -> bool:
+    """
+    Garantía de contenido argentino: verifica que el título, URL o resumen
+    contenga al menos una referencia argentina (provincia, institución, etc.).
+    Bloquea noticias de México, Ecuador, Colombia, etc. que pasan el filtro de dominio.
+    """
+    combined = f"{title} {url} {summary}".lower()
+    s = unicodedata.normalize("NFD", combined)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return any(
+        "".join(c for c in unicodedata.normalize("NFD", ref) if unicodedata.category(c) != "Mn") in s
+        for ref in _ARGENTINA_MENTIONS
+    )
+
+
 def _es_dominio_argentino(url: str) -> bool:
     """
     Garantía estructural: solo acepta artículos alojados en dominios .ar.
@@ -445,6 +480,8 @@ def run(max_articles: int = 10):
     publicados = 0
     nuevos_ids = []
     provincia_count: dict[str, int] = {}  # artículos publicados por provincia esta tanda
+    tecnologia_publicados = 0  # cap 15% del total
+    max_tecnologia = max(1, int(max_articles * _CUOTA_TECNOLOGIA))
 
     for source in config.NEWS_SOURCES:
         if publicados >= max_articles:
@@ -496,6 +533,20 @@ def run(max_articles: int = 10):
                     database.mark_seen(url, title, source["name"])
                     continue
                 logger.info(f"  [INTL OK] [{cat_temp}] {title[:55]}")
+
+            # Filtro 3 — Argentina: el artículo debe mencionar Argentina, una provincia o institución nacional
+            # Captura noticias mexicanas/colombianas/ecuatorianas de fuentes .ar o provinciales sindicadas
+            cat_temp = _detectar_categoria(title)
+            if cat_temp not in _CATEGORIAS_INTL_PERMITIDAS and not _menciona_argentina(title, url, summary):
+                logger.info(f"  [AR BLOCK] Sin referencia argentina: {title[:55]}")
+                database.mark_seen(url, title, source["name"])
+                continue
+
+            # Filtro 4 — cupo Tecnología: máximo 15% del total publicado
+            if cat_temp == "Tecnología" and tecnologia_publicados >= max_tecnologia:
+                logger.info(f"  [TECH CAP] Cupo de Tecnología ({max_tecnologia}) alcanzado: {title[:50]}")
+                database.mark_seen(url, title, source["name"])
+                continue
 
             if database.is_published(url):
                 continue
@@ -565,6 +616,8 @@ def run(max_articles: int = 10):
                 publicados += 1
                 if provincia:
                     provincia_count[provincia] = provincia_count.get(provincia, 0) + 1
+                if categoria_nombre == "Tecnología":
+                    tecnologia_publicados += 1
                 logger.info(
                     f"  ✓ [{provincia or 'Nacional'}] [{categoria_nombre}] {titulo_final[:60]} | WP ID={wp_post_id}"
                 )
