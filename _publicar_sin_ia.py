@@ -255,14 +255,38 @@ _INSTITUCIONES = [
 ]
 
 
-def _titulo_con_provincia(title: str, provincia: str) -> str:
+def _es_noticia_provincial(title: str, url: str, summary: str, provincia: str) -> bool:
+    """
+    Verifica que la nota sea realmente sobre esa provincia.
+    Evita poner "En Tucumán," en una nota sobre Milei en Casa Rosada
+    que La Gaceta cubre como diario nacional.
+    """
+    dem = _DEMONYMOS.get(provincia, "")
+    adj = _ADJETIVOS.get(provincia, "")
+    combined = f"{title} {url} {summary}".lower()
+
+    def norm(s: str) -> str:
+        s = unicodedata.normalize("NFD", s)
+        return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+    combined_n = norm(combined)
+    checks = [provincia] + ([dem] if dem else []) + ([adj] if adj else [])
+    return any(norm(c.lower()) in combined_n for c in checks)
+
+
+def _titulo_con_provincia(title: str, provincia: str, url: str = "", summary: str = "") -> str:
     """
     Integra la provincia con variedad de estilos periodísticos.
     Prioridad: institución adjetivada > verbo pasado > gentilicio > al final.
     "En [Provincia]," al principio es el último recurso, no el default.
+    Solo agrega el prefijo si la nota es realmente sobre esa provincia.
     """
     import random
     if not provincia or provincia in _PROVINCIAS_SIN_PREFIJO:
+        return title
+
+    # Si la nota no menciona la provincia, es cobertura nacional del diario local — no prefijamos
+    if not _es_noticia_provincial(title, url, summary, provincia):
         return title
 
     adj = _ADJETIVOS.get(provincia, "")
@@ -514,7 +538,8 @@ def run(max_articles: int = 10):
             categories = [cat_id] if cat_id else []
 
             # Título con provincia integrada en redacción natural
-            titulo_final = _titulo_con_provincia(title, provincia)
+            # Solo se agrega el prefijo si la nota menciona la provincia (no para noticias nacionales)
+            titulo_final = _titulo_con_provincia(title, provincia, url=url, summary=summary)
 
             body_html = _build_body_html(article.full_text, source["name"], url)
 
