@@ -1,0 +1,54 @@
+name: Borrar noticias internacionales
+
+on:
+  workflow_dispatch:
+    inputs:
+      horas:
+        description: 'Ventana de tiempo en horas hacia atrás (default: 3)'
+        required: false
+        default: '3'
+        type: string
+      dry_run:
+        description: 'Solo mostrar qué se eliminaría, sin borrar'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  borrar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          EOF
+
+      - name: Borrar noticias internacionales
+        run: |
+          ARGS="--horas ${{ github.event.inputs.horas || '3' }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python _borrar_internacionales.py $ARGS

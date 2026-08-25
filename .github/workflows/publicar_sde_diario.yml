@@ -1,0 +1,60 @@
+name: Pasada SDE diaria
+
+on:
+  schedule:
+    # Todos los días a las 09:00 hora Argentina (12:00 UTC)
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    inputs:
+      max:
+        description: 'Máximo de artículos a publicar (default: 8)'
+        required: false
+        default: '8'
+        type: string
+
+jobs:
+  publicar_sde:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SEARCH_API_KEY=${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          GOOGLE_SEARCH_CX=${{ secrets.GOOGLE_SEARCH_CX }}
+          EOF
+
+      - name: Publicar noticias SDE
+        run: python _publicar_sde_diario.py --max ${{ github.event.inputs.max || '8' }}
+
+      - name: Guardar base de datos actualizada
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add published_articles.db || true
+          git diff --cached --quiet || git commit -m "db: pasada SDE diaria $(date -u +%Y-%m-%dT%H:%M)"
+          git push || true
