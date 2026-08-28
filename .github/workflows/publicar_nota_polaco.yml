@@ -1,0 +1,48 @@
+name: Publicar nota El Polaco Riemersma
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          EOF
+
+      - name: Publicar nota
+        run: python _publicar_nota_polaco.py
+
+      - name: Guardar base de datos
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add published_articles.db || true
+          git diff --cached --quiet || git commit -m "db: nota El Polaco Riemersma publicada"
+          git push || true
