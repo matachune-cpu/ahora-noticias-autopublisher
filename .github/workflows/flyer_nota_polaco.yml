@@ -1,0 +1,44 @@
+name: Flyer El Polaco → Instagram
+
+on:
+  workflow_dispatch:
+
+jobs:
+  flyer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          META_ACCESS_TOKEN=${{ secrets.META_ACCESS_TOKEN }}
+          IG_ACCOUNT_ID=${{ secrets.IG_ACCOUNT_ID }}
+          FLYER_TEMPLATE_PATH=${{ secrets.FLYER_TEMPLATE_PATH || 'templates/flyer_base.png' }}
+          EOF
+
+      - name: Generar flyer y publicar en Instagram
+        run: python _flyer_nota_polaco.py
