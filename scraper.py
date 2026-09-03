@@ -283,6 +283,9 @@ def extract_article(url: str, source_name: str, title: str, summary: str,
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
+        # Forzar encoding correcto: si el servidor no declara charset,
+        # requests cae en ISO-8859-1 por defecto y salen símbolos.
+        resp.encoding = resp.apparent_encoding or "utf-8"
         soup = BeautifulSoup(resp.text, "lxml")
 
         for tag in soup(["nav", "footer", "script", "style", "aside", "iframe"]):
