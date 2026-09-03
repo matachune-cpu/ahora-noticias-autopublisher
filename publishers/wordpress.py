@@ -174,16 +174,28 @@ def set_sticky(post_id: int, sticky: bool) -> bool:
         return False
 
 
-def rotate_sticky_posts(new_post_ids: list[int], max_sticky: int = 4):
+def rotate_sticky_posts(new_post_ids: list[int] = None, max_sticky: int = 4):
     """
-    Quita el sticky a los posts actuales y marca como sticky los nuevos IDs.
-    Mantiene hasta max_sticky posts fijados en total.
-    """
-    current = get_sticky_post_ids()
-    for pid in current:
-        set_sticky(pid, False)
-        logger.info(f"WordPress: sticky quitado a post ID={pid}")
+    Mantiene el hero con los max_sticky posts más recientes.
 
-    for pid in new_post_ids[:max_sticky]:
-        set_sticky(pid, True)
-        logger.info(f"WordPress: post ID={pid} marcado como destacado (sticky)")
+    - Si se pasan new_post_ids, los marca como sticky primero.
+    - Luego trim: quita el sticky a los más viejos (ID menor) hasta dejar solo max_sticky.
+    - Llamable sin argumentos: solo limpia/rota los stickies existentes.
+    """
+    # Marcar los nuevos como sticky
+    if new_post_ids:
+        for pid in new_post_ids:
+            if set_sticky(pid, True):
+                logger.info(f"WordPress: post ID={pid} marcado como destacado")
+
+    # Obtener lista actualizada de todos los stickies
+    current = get_sticky_post_ids()
+    if len(current) <= max_sticky:
+        return
+
+    # Quitar sticky a los más viejos (ID menor = publicado antes)
+    sorted_ids = sorted(current, reverse=True)  # desc: más reciente primero
+    to_remove = sorted_ids[max_sticky:]
+    for pid in to_remove:
+        set_sticky(pid, False)
+        logger.info(f"WordPress: sticky quitado a post ID={pid} (excede máx {max_sticky})")

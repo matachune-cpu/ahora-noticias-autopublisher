@@ -289,9 +289,10 @@ def main():
     logger.info(f"✓ WordPress: ID={wp_id} | {wp_link}")
 
     try:
-        wordpress.rotate_sticky_posts(max_sticky=4)
-    except Exception:
-        pass
+        wordpress.rotate_sticky_posts(new_post_ids=[wp_id], max_sticky=4)
+        logger.info("✓ Sticky rotation ejecutada")
+    except Exception as e:
+        logger.warning(f"Error rotate_sticky: {e}")
 
     # 4. Generar captions con Gemini
     captions = _generar_captions_gemini(wp_link)

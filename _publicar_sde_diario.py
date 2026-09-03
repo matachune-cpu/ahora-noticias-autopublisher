@@ -237,8 +237,7 @@ def run(max_articles: int = 8):
 
     logger.info(f"\nDestacando: [{mejor_fuente}] {mejor_title[:65]} (ID={mejor_id})")
     try:
-        wordpress.set_sticky(mejor_id, True)
-        wordpress.rotate_sticky_posts(max_sticky=4)
+        wordpress.rotate_sticky_posts(new_post_ids=[mejor_id], max_sticky=4)
         logger.info("  ✓ Sticky aplicado y rotación ejecutada")
     except Exception as e:
         logger.error(f"  Error al destacar: {e}")

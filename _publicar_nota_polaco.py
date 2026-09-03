@@ -183,7 +183,7 @@ def main():
 
     # Rotar sticky posts para que aparezca en el hero
     try:
-        wordpress.rotate_sticky_posts(max_sticky=4)
+        wordpress.rotate_sticky_posts(new_post_ids=[wp_id], max_sticky=4)
         logger.info("✓ Sticky rotation ejecutada")
     except Exception as e:
         logger.warning(f"Error en rotate_sticky: {e}")
