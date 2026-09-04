@@ -98,12 +98,12 @@ consenso transversal por encima de las diferencias partidarias.</p>
 
 # ── FUENTES DE IMÁGENES ───────────────────────────────────────────────────────
 
-# Asset local de la foto de jugadores con bandera Malvinas
+# Assets locales
 MALVINAS_LOCAL_PATH = "assets/malvinas_copa2021.jpg"
+ZAMORA_LOCAL_PATH   = "assets/zamora.jpg"          # foto provista por el editor
 
-# Páginas de Wikipedia para obtener fotos de los políticos (fuente primaria, estable)
-WIKI_ZAMORA = "Gerardo_Zamora"       # es.wikipedia.org
-WIKI_MILEI  = "Javier_Milei"        # es.wikipedia.org
+# Wikipedia solo para Milei (Zamora ya tiene foto local)
+WIKI_MILEI = "Javier_Milei"        # es.wikipedia.org
 
 # Fuentes de respaldo si Wikipedia falla
 FUENTES_ZAMORA_FALLBACK = [
@@ -224,6 +224,24 @@ def _fit_crop(img: Image.Image, w: int, h: int) -> Image.Image:
     return img.crop((left, top, left + w, top + h))
 
 
+def _face_crop(img: Image.Image, w: int, h: int) -> Image.Image:
+    """Igual que _fit_crop pero toma desde la parte superior para mostrar la cara."""
+    src_w, src_h = img.size
+    ratio = max(w / src_w, h / src_h)
+    new_w, new_h = int(src_w * ratio), int(src_h * ratio)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left = (new_w - w) // 2
+    top = 0  # desde arriba para capturar la cara
+    if new_h < h:
+        # si la imagen es muy baja, forzar escala mínima
+        ratio2 = h / new_h
+        new_w = int(new_w * ratio2)
+        new_h = h
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        left = (new_w - w) // 2
+    return img.crop((left, top, left + w, top + h))
+
+
 def _draw_label(draw: ImageDraw.ImageDraw, text: str, x: int, y: int, font: ImageFont.FreeTypeFont):
     """Dibuja etiqueta con fondo semitransparente oscuro."""
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -270,7 +288,7 @@ def generate_composite_flyer(
 
         pw = FLYER_W // len(personas)
         for i, (nombre, pimg) in enumerate(nombres):
-            crop = _fit_crop(pimg, pw, bot_h)
+            crop = _face_crop(pimg, pw, bot_h)   # face_crop para ver más la cara
             canvas.paste(crop, (i * pw, top_h))
             # Etiqueta de nombre
             _draw_label(draw, nombre, i * pw + 12, top_h + 8, font_label)
@@ -444,23 +462,25 @@ def main():
         logger.info("WP ya publicado — regenerando solo flyer + redes sociales.")
 
     # ── BUSCAR IMÁGENES ──────────────────────────────────────────────────────
-    logger.info("Buscando imagen de Zamora (Wikipedia)...")
-    img_zamora_url = _get_wikipedia_image(WIKI_ZAMORA)
-    if not img_zamora_url:
-        logger.info("  Wikipedia falló, buscando en noticias...")
-        img_zamora_url = _buscar_en_noticias("zamora", FUENTES_ZAMORA_FALLBACK)
+    logger.info("Cargando imagen de Zamora (asset local)...")
+    zamora_pil = _fetch_pil_image(None, local_path=ZAMORA_LOCAL_PATH)
+    img_zamora_url = None
+    if not zamora_pil:
+        logger.info("  Asset local no disponible, buscando en Wikipedia...")
+        img_zamora_url = _get_wikipedia_image("Gerardo_Zamora")
+        if not img_zamora_url:
+            img_zamora_url = _buscar_en_noticias("zamora", FUENTES_ZAMORA_FALLBACK)
+        zamora_pil = _fetch_pil_image(img_zamora_url)
 
     logger.info("Buscando imagen de Milei (Wikipedia)...")
     img_milei_url = _get_wikipedia_image(WIKI_MILEI)
     if not img_milei_url:
         logger.info("  Wikipedia falló, buscando en noticias...")
         img_milei_url = _buscar_en_noticias("milei", FUENTES_MILEI_FALLBACK)
+    milei_pil = _fetch_pil_image(img_milei_url)
 
     logger.info("Cargando imagen Malvinas (asset local)...")
     malvinas_pil = _fetch_pil_image(None, local_path=MALVINAS_LOCAL_PATH)
-
-    zamora_pil = _fetch_pil_image(img_zamora_url)
-    milei_pil = _fetch_pil_image(img_milei_url)
 
     logger.info(f"  Malvinas: {'OK' if malvinas_pil else 'no disponible'}")
     logger.info(f"  Zamora:   {'OK' if zamora_pil else 'no disponible'}")
