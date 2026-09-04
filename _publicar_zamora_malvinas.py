@@ -30,7 +30,7 @@ logger = logging.getLogger("zamora_malvinas")
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 
 TITULO_WP = (
-    "'Ninguna especulación electoral por encima': Zamora apoyó a Milei "
+    "'Ninguna especulación electoral por encima': el senador Zamora apoyó a Milei "
     "en la causa Malvinas y pidió unidad nacional"
 )
 
