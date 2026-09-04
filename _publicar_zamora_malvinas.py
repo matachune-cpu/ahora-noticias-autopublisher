@@ -98,35 +98,48 @@ consenso transversal por encima de las diferencias partidarias.</p>
 
 # ── FUENTES DE IMÁGENES ───────────────────────────────────────────────────────
 
-# Imagen de Zamora (busca en fuentes locales y nacionales)
-FUENTES_ZAMORA = [
-    "https://www.elliberal.com.ar/nota/politica/",  # buscará og:image de artículos recientes
-    "https://www.nuevodiarioweb.com.ar/nota/politica/",
+# Asset local de la foto de jugadores con bandera Malvinas
+MALVINAS_LOCAL_PATH = "assets/malvinas_copa2021.jpg"
+
+# Páginas de Wikipedia para obtener fotos de los políticos (fuente primaria, estable)
+WIKI_ZAMORA = "Gerardo_Zamora"       # es.wikipedia.org
+WIKI_MILEI  = "Javier_Milei"        # es.wikipedia.org
+
+# Fuentes de respaldo si Wikipedia falla
+FUENTES_ZAMORA_FALLBACK = [
     "https://www.sde.gob.ar/noticias/",
-    "https://www.infobae.com/santiago-del-estero/",
-]
-FUENTES_ZAMORA_DIRECTAS = [
     "https://www.elliberal.com.ar",
     "https://www.nuevodiarioweb.com.ar",
 ]
-
-# Imagen de Milei (busca en fuentes nacionales)
-FUENTES_MILEI = [
+FUENTES_MILEI_FALLBACK = [
     "https://www.infobae.com/politica/",
     "https://www.tn.com.ar/politica/",
     "https://www.lanacion.com.ar/politica/",
-    "https://www.clarin.com/politica/",
-]
-
-# Imagen Malvinas (foto jugadores con bandera - asset local o búsqueda)
-MALVINAS_LOCAL_PATH = "assets/malvinas_copa2021.jpg"
-FUENTES_MALVINAS = [
-    "https://www.tycsports.com/futbol/seleccion-argentina/copa-america-2021-argentina-campeona-festejo-las-malvinas-son-argentinas-id383459.html",
-    "https://www.tn.com.ar/deportes/",
 ]
 
 
 # ── BÚSQUEDA DE IMÁGENES ──────────────────────────────────────────────────────
+
+def _get_wikipedia_image(page_name: str, lang: str = "es") -> str | None:
+    """Obtiene la imagen principal de un artículo de Wikipedia vía REST API."""
+    try:
+        url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{page_name}"
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "AhoraNoticias/1.0 (ahoranoticias.com.ar)"},
+            timeout=12,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            # Preferir originalimage (alta resolución) sobre thumbnail
+            img = (data.get("originalimage") or data.get("thumbnail") or {}).get("source", "")
+            if img:
+                logger.info(f"  Wikipedia {page_name}: {img[:80]}")
+                return img
+    except Exception as e:
+        logger.debug(f"Wikipedia API error ({page_name}): {e}")
+    return None
+
 
 def _buscar_og_image(url: str) -> str | None:
     try:
@@ -145,28 +158,18 @@ def _buscar_og_image(url: str) -> str | None:
     return None
 
 
-def _buscar_imagen_persona(keyword: str, fuentes: list[str]) -> str | None:
-    """Busca la primera imagen válida de la persona en las fuentes dadas."""
+def _buscar_en_noticias(keyword: str, fuentes: list[str]) -> str | None:
+    """Busca imagen de una persona en portadas de sitios de noticias."""
     for base_url in fuentes:
         try:
-            resp = requests.get(base_url, headers=HEADERS, timeout=10)
-            if resp.status_code != 200:
-                continue
-            soup = BeautifulSoup(resp.text, "html.parser")
-            # Buscar links de artículos que mencionen la keyword
-            links = soup.find_all("a", href=True)
-            for link in links:
-                href = link["href"]
-                text = link.get_text(strip=True).lower()
-                if keyword.lower() in text or keyword.lower() in href.lower():
-                    if not href.startswith("http"):
-                        from urllib.parse import urlparse
-                        parsed = urlparse(base_url)
-                        href = f"{parsed.scheme}://{parsed.netloc}{href}"
-                    img = _buscar_og_image(href)
-                    if img:
-                        logger.info(f"  Imagen {keyword}: {img[:80]}")
-                        return img
+            # Intento 1: og:image de la portada (suele ser la nota más reciente)
+            img = _buscar_og_image(base_url)
+            if img and keyword.lower() not in img.lower():
+                # La portada tiene imagen pero no es del keyword — intentar artículos
+                pass
+            if img:
+                logger.info(f"  Portada {base_url}: {img[:80]}")
+                return img
         except Exception as e:
             logger.debug(f"Búsqueda {keyword} en {base_url}: {e}")
     return None
@@ -434,37 +437,27 @@ def _generar_captions_gemini(wp_link: str) -> dict:
 def main():
     database.init_db()
 
-    if database.is_published(URL_CANONICA):
-        logger.warning("Esta nota ya fue publicada. Abortando.")
-        return
-
     logger.info("=== Publicando: Zamora apoya a Milei en Malvinas ===")
 
-    # ── BUSCAR IMÁGENES ──────────────────────────────────────────────────────
-    logger.info("Buscando imagen de Zamora...")
-    img_zamora_url = _buscar_imagen_persona("zamora", FUENTES_ZAMORA_DIRECTAS)
-    if not img_zamora_url:
-        for url in FUENTES_ZAMORA:
-            img_zamora_url = _buscar_og_image(url)
-            if img_zamora_url:
-                break
+    ya_publicado = database.is_published(URL_CANONICA)
+    if ya_publicado:
+        logger.info("WP ya publicado — regenerando solo flyer + redes sociales.")
 
-    logger.info("Buscando imagen de Milei...")
-    img_milei_url = None
-    for url in FUENTES_MILEI:
-        img_milei_url = _buscar_og_image(url)
-        if img_milei_url:
-            break
+    # ── BUSCAR IMÁGENES ──────────────────────────────────────────────────────
+    logger.info("Buscando imagen de Zamora (Wikipedia)...")
+    img_zamora_url = _get_wikipedia_image(WIKI_ZAMORA)
+    if not img_zamora_url:
+        logger.info("  Wikipedia falló, buscando en noticias...")
+        img_zamora_url = _buscar_en_noticias("zamora", FUENTES_ZAMORA_FALLBACK)
+
+    logger.info("Buscando imagen de Milei (Wikipedia)...")
+    img_milei_url = _get_wikipedia_image(WIKI_MILEI)
+    if not img_milei_url:
+        logger.info("  Wikipedia falló, buscando en noticias...")
+        img_milei_url = _buscar_en_noticias("milei", FUENTES_MILEI_FALLBACK)
 
     logger.info("Cargando imagen Malvinas (asset local)...")
     malvinas_pil = _fetch_pil_image(None, local_path=MALVINAS_LOCAL_PATH)
-    if not malvinas_pil:
-        logger.info("Asset local no disponible, buscando en línea...")
-        for url in FUENTES_MALVINAS:
-            mv_url = _buscar_og_image(url)
-            if mv_url:
-                malvinas_pil = _fetch_pil_image(mv_url)
-                break
 
     zamora_pil = _fetch_pil_image(img_zamora_url)
     milei_pil = _fetch_pil_image(img_milei_url)
@@ -477,64 +470,68 @@ def main():
         logger.error("Sin ninguna imagen. Abortando.")
         return
 
-    # ── PUBLICAR EN WORDPRESS ────────────────────────────────────────────────
-    # Imagen destacada de WP: primera disponible
-    wp_img_url = img_zamora_url or img_milei_url
-    wp_img_id = None
-    if wp_img_url:
+    # ── PUBLICAR EN WORDPRESS (solo si no fue publicado antes) ───────────────
+    wp_id = None
+    wp_link = "https://ahoranoticias.com.ar"
+
+    if not ya_publicado:
+        wp_img_url = img_zamora_url or img_milei_url
+        wp_img_id = None
+        if wp_img_url:
+            try:
+                result = wordpress.upload_image(image_url=wp_img_url,
+                                                filename=f"zamora-malvinas-{datetime.now().strftime('%Y%m%d')}.jpg")
+                if isinstance(result, tuple):
+                    wp_img_id, _ = result
+            except Exception as e:
+                logger.warning(f"Imagen WP fallida: {e}")
+
+        cat_ids = []
+        for cat in ["Política", "Santiago del Estero"]:
+            try:
+                cid = wordpress.get_or_create_category(cat)
+                if cid:
+                    cat_ids.append(cid)
+            except Exception:
+                pass
+
         try:
-            result = wordpress.upload_image(image_url=wp_img_url,
-                                            filename=f"zamora-malvinas-{datetime.now().strftime('%Y%m%d')}.jpg")
-            if isinstance(result, tuple):
-                wp_img_id, _ = result
+            wp_result = wordpress.create_post(
+                title=TITULO_WP,
+                body_html=CUERPO_HTML,
+                original_url=URL_CANONICA,
+                source_name=FUENTE,
+                featured_media_id=wp_img_id,
+                sticky=True,
+                categories=cat_ids,
+            )
         except Exception as e:
-            logger.warning(f"Imagen WP fallida: {e}")
+            logger.error(f"Error WP: {e}")
+            return
 
-    cat_ids = []
-    for cat in ["Política", "Santiago del Estero"]:
-        try:
-            cid = wordpress.get_or_create_category(cat)
-            if cid:
-                cat_ids.append(cid)
-        except Exception:
-            pass
+        if not wp_result:
+            logger.error("WP no devolvió respuesta.")
+            return
 
-    try:
-        wp_result = wordpress.create_post(
-            title=TITULO_WP,
-            body_html=CUERPO_HTML,
-            original_url=URL_CANONICA,
-            source_name=FUENTE,
-            featured_media_id=wp_img_id,
-            sticky=True,
-            categories=cat_ids,
-        )
-    except Exception as e:
-        logger.error(f"Error WP: {e}")
-        return
+        if isinstance(wp_result, tuple):
+            wp_id, wp_link = wp_result
+        else:
+            wp_id = wp_result.get("id") if isinstance(wp_result, dict) else None
+            wp_link = wp_result.get("link", "https://ahoranoticias.com.ar") if isinstance(wp_result, dict) else "https://ahoranoticias.com.ar"
 
-    if not wp_result:
-        logger.error("WP no devolvió respuesta.")
-        return
+        logger.info(f"✓ WordPress: ID={wp_id} | {wp_link}")
 
-    if isinstance(wp_result, tuple):
-        wp_id, wp_link = wp_result
+        if wp_id:
+            try:
+                wordpress.rotate_sticky_posts(new_post_ids=[int(wp_id)], max_sticky=4)
+                logger.info("✓ Sticky rotation OK")
+            except Exception as e:
+                logger.warning(f"Rotate sticky error: {e}")
+
+        database.mark_published(URL_CANONICA, TITULO_WP, FUENTE,
+                                wp_post_id=str(wp_id) if wp_id else None)
     else:
-        wp_id = wp_result.get("id") if isinstance(wp_result, dict) else None
-        wp_link = wp_result.get("link", "") if isinstance(wp_result, dict) else ""
-
-    logger.info(f"✓ WordPress: ID={wp_id} | {wp_link}")
-
-    # Rotar sticky
-    if wp_id:
-        try:
-            wordpress.rotate_sticky_posts(new_post_ids=[int(wp_id)], max_sticky=4)
-            logger.info("✓ Sticky rotation OK")
-        except Exception as e:
-            logger.warning(f"Rotate sticky error: {e}")
-
-    database.mark_published(URL_CANONICA, TITULO_WP, FUENTE,
-                            wp_post_id=str(wp_id) if wp_id else None)
+        logger.info("  WP saltado (ya publicado).")
 
     # ── GENERAR FLYER ────────────────────────────────────────────────────────
     flyer_path = None
