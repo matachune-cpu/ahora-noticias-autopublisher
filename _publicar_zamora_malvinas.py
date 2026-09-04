@@ -434,7 +434,7 @@ def _generar_captions_gemini(wp_link: str) -> dict:
 def main():
     database.init_db()
 
-    if database.is_seen(URL_CANONICA):
+    if database.is_published(URL_CANONICA):
         logger.warning("Esta nota ya fue publicada. Abortando.")
         return
 
@@ -533,7 +533,8 @@ def main():
         except Exception as e:
             logger.warning(f"Rotate sticky error: {e}")
 
-    database.mark_seen(URL_CANONICA, TITULO_WP, FUENTE)
+    database.mark_published(URL_CANONICA, TITULO_WP, FUENTE,
+                            wp_post_id=str(wp_id) if wp_id else None)
 
     # ── GENERAR FLYER ────────────────────────────────────────────────────────
     flyer_path = None
