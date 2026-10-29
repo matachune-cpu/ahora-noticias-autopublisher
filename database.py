@@ -37,6 +37,21 @@ def init_db():
                 ig_post_id TEXT
             )
         """)
+        # Cola de reintentos: artículos que no pudieron procesarse por cuota de Gemini agotada
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS retry_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url_hash TEXT UNIQUE NOT NULL,
+                url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                full_text TEXT NOT NULL,
+                source TEXT NOT NULL,
+                image_url TEXT,
+                detected_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                priority INTEGER DEFAULT 5,
+                status TEXT DEFAULT 'pending'
+            )
+        """)
         # Migración: agregar columna source a ig_queue si no existe
         try:
             conn.execute("ALTER TABLE ig_queue ADD COLUMN source TEXT DEFAULT ''")
@@ -266,3 +281,98 @@ def ig_queue_count_pending() -> int:
             "SELECT COUNT(*) FROM ig_queue WHERE posted_at IS NULL"
         ).fetchone()
         return row[0] if row else 0
+
+
+# ── Cola de reintentos (Gemini quota) ────────────────────────────────────────
+
+def retry_queue_add(
+    url: str,
+    title: str,
+    full_text: str,
+    source: str,
+    image_url: str = None,
+    priority: int = 5,
+) -> bool:
+    """
+    Guarda un artículo en la cola de reintentos.
+    INSERT OR IGNORE — si ya está, no lo sobreescribe.
+    Retorna True si se insertó, False si ya existía.
+    """
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO retry_queue
+                    (url_hash, url, title, full_text, source, image_url, priority, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+                """,
+                (url_hash(url), url, title, full_text, source, image_url, priority),
+            )
+            conn.commit()
+            return conn.total_changes > 0
+    except Exception:
+        return False
+
+
+def retry_queue_get_pending(limit: int = 5) -> list:
+    """
+    Devuelve artículos pendientes, ordenados por prioridad DESC, antigüedad ASC.
+    Prioridad más alta + más antiguos se procesan primero.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT url, title, full_text, source, image_url, detected_at, priority
+            FROM retry_queue
+            WHERE status = 'pending'
+            ORDER BY priority DESC, detected_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def retry_queue_mark_done(url: str):
+    """Marca un artículo como procesado exitosamente."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE retry_queue SET status='done' WHERE url_hash=?",
+            (url_hash(url),),
+        )
+        conn.commit()
+
+
+def retry_queue_mark_discarded(url: str):
+    """Marca un artículo como descartado por razón editorial (no se reintentará)."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE retry_queue SET status='discarded' WHERE url_hash=?",
+            (url_hash(url),),
+        )
+        conn.commit()
+
+
+def retry_queue_count_pending() -> int:
+    """Cuántos artículos esperan reintento."""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM retry_queue WHERE status='pending'"
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def retry_queue_cleanup_published():
+    """
+    Marca como 'done' los artículos de la cola que ya fueron publicados
+    (por urgent.yml u otro camino paralelo).
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE retry_queue SET status='done'
+            WHERE status='pending' AND url_hash IN (SELECT url_hash FROM articles)
+            """,
+        )
+        conn.commit()

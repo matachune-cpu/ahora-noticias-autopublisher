@@ -64,4 +64,5 @@ jobs:
           git add published_articles.db
           git add .gemini_daily_quota.json || true
           git diff --staged --quiet || git commit -m "DB actualizada [skip ci]"
+          git pull --rebase origin ${{ github.ref_name }} || true
           git push

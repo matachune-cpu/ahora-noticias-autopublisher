@@ -121,4 +121,5 @@ jobs:
           git add published_articles.db
           git add .gemini_daily_quota.json || true
           git diff --staged --quiet || git commit -m "DB: urgente publicado [skip ci]"
-          git push || true
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git push

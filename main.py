@@ -179,6 +179,260 @@ def _ssl_ok() -> bool:
         return False
 
 
+# ── Pipeline de publicación (reutilizado por process_source y process_retry_queue) ──
+
+def _publish_pipeline(
+    url: str,
+    article_image_url,
+    rewritten: dict,
+    source_name: str,
+    titulos_recientes: list,
+    no_argentina_count: list,
+) -> bool:
+    """
+    Ejecuta el pipeline completo post-rewrite: imagen → WP → WA → FB → IG cola → DB.
+    Retorna True si el artículo se publicó y registró. False si WordPress falló.
+    """
+    ig_score = rewritten.get("ig_relevancia", 5)
+    categoria = rewritten.get("categoria", "")
+
+    # 1. Resolver imagen
+    img_result = resolve_news_image(
+        title=rewritten["title"],
+        summary=rewritten.get("whatsapp_text", ""),
+        article_url=url,
+        article_image_url=article_image_url,
+    )
+    if img_result["status"] != "VALIDATED":
+        logger.warning(
+            f"  → Sin imagen validada — redes sociales bloqueadas. "
+            f"Razones: {img_result.get('rejection_reasons', [])[:2]}"
+        )
+        imagen_limpia = None
+        imagen_validada = False
+    else:
+        imagen_limpia = img_result["image_url"]
+        imagen_validada = True
+        logger.info(
+            f"  → Imagen validada | estrategia={img_result['strategy']} "
+            f"| score={img_result['final_score']:.0f}"
+        )
+
+    # 2. Subir foto a WordPress
+    media_id = media_url = None
+    if imagen_limpia:
+        media_id, media_url = wordpress.upload_image(
+            image_url=imagen_limpia,
+            filename=f"foto-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
+        )
+
+    # 3. Publicar en WordPress
+    wp_post_id, wp_post_url = wordpress.create_post(
+        title=rewritten["title"],
+        body_html=rewritten["body_html"],
+        original_url=url,
+        source_name=source_name,
+        featured_media_id=media_id,
+    )
+    if not wp_post_id or not wp_post_url:
+        logger.error(
+            f"WordPress falló para '{rewritten['title'][:60]}' — "
+            f"cancelando FB/IG/WA para evitar linkear a la fuente externa."
+        )
+        database.mark_seen(url, rewritten["title"], source_name)
+        return False
+
+    # 4. WhatsApp
+    wa_sent = whatsapp.send_to_channel(
+        text=rewritten.get("whatsapp_text", ""),
+        wp_post_url=wp_post_url,
+    )
+
+    # GUARD: sin imagen validada → solo WP + WA
+    if not imagen_validada:
+        logger.warning(
+            f"SOCIAL_PUBLICATION_BLOCKED: imagen no validada para "
+            f"'{rewritten['title'][:60]}'. Publicado solo en WP + WA."
+        )
+        database.mark_published(
+            url=url, title=rewritten["title"], source=source_name,
+            wp_post_id=str(wp_post_id) if wp_post_id else None,
+            fb_post_id=None, ig_post_id=None, wa_sent=wa_sent,
+        )
+        titulos_recientes.append(rewritten["title"])
+        if rewritten.get("region", "Argentina") != "Argentina" and no_argentina_count is not None:
+            no_argentina_count[0] += 1
+        return True
+
+    # 5. Facebook
+    fb_image = media_url or imagen_limpia
+    fb_post_id = facebook.post_link(
+        title=rewritten["title"], wp_post_url=wp_post_url, original_url=url,
+        image_url=fb_image, caption=rewritten.get("facebook_caption"),
+    )
+
+    # 6. Flyer + cola de Instagram
+    flyer_path = flyer_public_url = None
+    ig_encolado = False
+    es_municipal = source_name in IG_MUNICIPAL_SOURCES
+    ig_min = IG_RELEVANCE_MIN_MUNICIPAL if es_municipal else IG_RELEVANCE_MIN
+
+    if ig_score >= ig_min:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            flyer_path = tmp.name
+        try:
+            generate_flyer(
+                title=rewritten["title"], source_name=source_name,
+                article_image_url=imagen_limpia, template_path=config.FLYER_TEMPLATE_PATH,
+                output_path=flyer_path, categoria=categoria,
+            )
+            _, flyer_public_url = wordpress.upload_image(
+                image_path=flyer_path,
+                filename=f"flyer-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
+            )
+            added = database.ig_queue_add(
+                url=url, title=rewritten["title"], ig_caption=rewritten["instagram_caption"],
+                flyer_public_url=flyer_public_url, relevance_score=ig_score, source=source_name,
+            )
+            ig_encolado = added
+            logger.info(
+                f"  → IG cola: score={ig_score}/10 | "
+                f"{'encolado' if added else 'ya en cola'} | "
+                f"pendientes={database.ig_queue_count_pending()}"
+            )
+        except Exception as e:
+            logger.error(f"Error generando flyer para IG: {e}")
+        finally:
+            if flyer_path and os.path.exists(flyer_path):
+                try:
+                    os.unlink(flyer_path)
+                except Exception:
+                    pass
+    else:
+        logger.info(f"  → IG omitido: score={ig_score}/10 (mínimo {IG_RELEVANCE_MIN})")
+
+    # 7. Registrar en DB
+    database.mark_published(
+        url=url, title=rewritten["title"], source=source_name,
+        wp_post_id=str(wp_post_id) if wp_post_id else None,
+        fb_post_id=str(fb_post_id) if fb_post_id else None,
+        ig_post_id=None, wa_sent=wa_sent,
+    )
+    logger.info(
+        f"Publicado: WP={wp_post_id} | FB={fb_post_id} | "
+        f"IG={'en cola' if ig_encolado else 'omitido'} | WA={wa_sent}"
+    )
+    titulos_recientes.append(rewritten["title"])
+    if rewritten.get("region", "Argentina") != "Argentina" and no_argentina_count is not None:
+        no_argentina_count[0] += 1
+    return True
+
+
+# ── Cola de reintentos (artículos perdidos por cuota de Gemini) ───────────────
+
+def process_retry_queue(titulos_recientes: list, no_argentina_count: list):
+    """
+    Procesa artículos guardados por cuota agotada.
+    Se llama al inicio de run_cycle(), ANTES de consultar el RSS.
+    Esto garantiza que los artículos se procesen aunque hayan desaparecido del feed.
+    """
+    from rewriter import _can_call_gemini
+
+    database.retry_queue_cleanup_published()
+
+    pending = database.retry_queue_get_pending(limit=3)
+    if not pending:
+        return
+
+    can_call, reason = _can_call_gemini()
+    if not can_call:
+        logger.info(
+            f"[RETRY QUEUE] {len(pending)} artículo(s) en espera — cuota agotada: {reason}"
+        )
+        return
+
+    logger.info(f"[RETRY QUEUE] Procesando {len(pending)} artículo(s) pendiente(s)")
+
+    for item in pending:
+        url = item["url"]
+        source_name = item["source"]
+
+        if database.is_published(url):
+            database.retry_queue_mark_done(url)
+            logger.debug(f"  [RETRY] Ya publicado, removido de la cola: {url}")
+            continue
+
+        # Pre-dedup por título original
+        dup, _, sim = es_tema_duplicado(
+            item["title"], titulos_recientes, DEDUP_THRESHOLD_PRE
+        )
+        if dup:
+            logger.info(f"  [RETRY-DEDUP] Tema ya cubierto (sim={sim}): {item['title'][:60]}")
+            database.retry_queue_mark_discarded(url)
+            database.mark_seen(url, item["title"], source_name)
+            continue
+
+        # Verificar cuota antes de cada llamada
+        can_call, reason = _can_call_gemini()
+        if not can_call:
+            logger.info(f"[RETRY QUEUE] Cuota agotada durante proceso — pausando: {reason}")
+            break
+
+        rewritten = rewrite_article(item["title"], item["full_text"], source_name)
+
+        if rewritten.get("quota_exhausted"):
+            logger.warning(f"[RETRY QUEUE] Cuota agotada al reintentar — pausando")
+            break
+
+        if not rewritten.get("es_publicable"):
+            logger.info(f"  [RETRY-DESCARTE] Gemini rechazó: {item['title'][:60]}")
+            database.retry_queue_mark_discarded(url)
+            database.mark_seen(url, item["title"], source_name)
+            continue
+
+        if not _cuerpo_valido(rewritten["body_html"]):
+            logger.info(f"  [RETRY-DESCARTE] Cuerpo insuficiente: {item['title'][:60]}")
+            database.retry_queue_mark_discarded(url)
+            database.mark_seen(url, item["title"], source_name)
+            continue
+
+        if rewritten.get("ig_relevancia", 5) < MIN_RELEVANCE_SCORE:
+            logger.info(f"  [RETRY-DESCARTE] Relevancia baja: {rewritten['title'][:60]}")
+            database.retry_queue_mark_discarded(url)
+            database.mark_seen(url, rewritten["title"], source_name)
+            continue
+
+        # Post-dedup por título reescrito
+        dup2, _, sim2 = es_tema_duplicado(rewritten["title"], titulos_recientes)
+        if dup2:
+            logger.info(f"  [RETRY-POST-DEDUP] Tema repetido (sim={sim2}): {rewritten['title'][:60]}")
+            database.retry_queue_mark_discarded(url)
+            database.mark_seen(url, rewritten["title"], source_name)
+            continue
+
+        logger.info(f"  [RETRY] Publicando: {rewritten['title'][:70]}")
+        published = _publish_pipeline(
+            url=url,
+            article_image_url=item.get("image_url"),
+            rewritten=rewritten,
+            source_name=source_name,
+            titulos_recientes=titulos_recientes,
+            no_argentina_count=no_argentina_count,
+        )
+
+        if published:
+            database.retry_queue_mark_done(url)
+            logger.info(f"  [RETRY] ✓ Publicado desde cola de reintentos")
+        else:
+            logger.warning(f"  [RETRY] Pipeline falló — artículo permanece en cola")
+
+        time.sleep(5)
+
+    pendientes_restantes = database.retry_queue_count_pending()
+    if pendientes_restantes:
+        logger.info(f"[RETRY QUEUE] {pendientes_restantes} artículo(s) aún en espera")
+
+
 # ── Procesamiento de fuentes ──────────────────────────────────────────────────
 
 def process_source(source: dict, titulos_recientes: list[str], no_argentina_count: list = None):
@@ -227,11 +481,18 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
 
         if not rewritten.get("es_publicable", False):
             if rewritten.get("quota_exhausted"):
-                logger.warning(
-                    f"  [CUOTA AGOTADA] Artículo disponible para reintento posterior: "
-                    f"{entry['title'][:70]}"
+                database.retry_queue_add(
+                    url=url,
+                    title=article.title,
+                    full_text=article.full_text,
+                    source=source["name"],
+                    image_url=getattr(article, "image_url", None),
                 )
-                continue  # NO mark_seen() — queda disponible para el próximo run
+                logger.warning(
+                    f"  [RETRY QUEUE] Cuota agotada — guardado para reintento aunque desaparezca del RSS: "
+                    f"{article.title[:70]}"
+                )
+                continue  # NO mark_seen()
             logger.info(
                 f"  [NO PUBLICABLE] Gemini rechazó el contenido: "
                 f"{(rewritten.get('title') or entry['title'])[:70]}"
@@ -300,168 +561,16 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
         url = item["url"]
         article = item["article"]
         rewritten = item["rewritten"]
-        categoria = rewritten.get("categoria", "")
-        ig_score = rewritten.get("ig_relevancia", 5)
 
-        # 1. Resolver imagen con validación completa (técnica + semántica + visual Gemini)
-        img_result = resolve_news_image(
-            title=rewritten["title"],
-            summary=rewritten.get("whatsapp_text", ""),
-            article_url=url,
-            article_image_url=article.image_url,
-        )
-
-        if img_result["status"] != "VALIDATED":
-            logger.warning(
-                f"  → Sin imagen validada — redes sociales bloqueadas. "
-                f"Razones: {img_result.get('rejection_reasons', [])[:2]}"
-            )
-            imagen_limpia = None
-            imagen_validada = False
-        else:
-            imagen_limpia = img_result["image_url"]
-            imagen_validada = True
-            logger.info(
-                f"  → Imagen validada | estrategia={img_result['strategy']} "
-                f"| score={img_result['final_score']:.0f}"
-            )
-
-        # 2. Subir foto original a WordPress como imagen destacada
-        wp_post_id = None
-        wp_post_url = None
-        media_id = None
-        media_url = None
-
-        if imagen_limpia:
-            media_id, media_url = wordpress.upload_image(
-                image_url=imagen_limpia,
-                filename=f"foto-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
-            )
-
-        # 3. Publicar en WordPress
-        wp_post_id, wp_post_url = wordpress.create_post(
-            title=rewritten["title"],
-            body_html=rewritten["body_html"],
-            original_url=url,
-            source_name=source["name"],
-            featured_media_id=media_id,
-        )
-
-        if not wp_post_id or not wp_post_url:
-            logger.error(
-                f"WordPress falló para '{rewritten['title'][:60]}' — "
-                f"cancelando FB/IG/WA para evitar linkear a la fuente externa."
-            )
-            database.mark_seen(url, rewritten["title"], source["name"])
-            continue
-
-        # 4. WhatsApp — puede publicar sin imagen
-        wa_sent = whatsapp.send_to_channel(
-            text=rewritten["whatsapp_text"],
-            wp_post_url=wp_post_url,
-        )
-
-        # GUARD CLAUSE: no publicar en redes sociales sin imagen validada
-        if not imagen_validada:
-            logger.warning(
-                f"SOCIAL_PUBLICATION_BLOCKED: imagen no validada para "
-                f"'{rewritten['title'][:60]}'. Publicado solo en WP + WA."
-            )
-            database.mark_published(
-                url=url,
-                title=rewritten["title"],
-                source=source["name"],
-                wp_post_id=str(wp_post_id) if wp_post_id else None,
-                fb_post_id=None,
-                ig_post_id=None,
-                wa_sent=wa_sent,
-            )
-            titulos_recientes.append(rewritten["title"])
-            if rewritten.get("region", "Argentina") != "Argentina" and no_argentina_count is not None:
-                no_argentina_count[0] += 1
-            processed += 1
-            time.sleep(5)
-            continue
-
-        # 5. Publicar en Facebook (imagen validada garantizada)
-        fb_image = media_url or imagen_limpia
-        fb_post_id = facebook.post_link(
-            title=rewritten["title"],
-            wp_post_url=wp_post_url,
-            original_url=url,
-            image_url=fb_image,
-            caption=rewritten.get("facebook_caption"),
-        )
-
-        # 6. Generar flyer y encolar en Instagram (imagen validada — no puede ser None)
-        flyer_public_url = None
-        flyer_path = None
-        ig_encolado = False
-        es_municipal = source["name"] in IG_MUNICIPAL_SOURCES
-        ig_min = IG_RELEVANCE_MIN_MUNICIPAL if es_municipal else IG_RELEVANCE_MIN
-
-        if ig_score >= ig_min:
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                flyer_path = tmp.name
-            try:
-                generate_flyer(
-                    title=rewritten["title"],
-                    source_name=source["name"],
-                    article_image_url=imagen_limpia,
-                    template_path=config.FLYER_TEMPLATE_PATH,
-                    output_path=flyer_path,
-                    categoria=categoria,
-                )
-                _, flyer_public_url = wordpress.upload_image(
-                    image_path=flyer_path,
-                    filename=f"flyer-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
-                )
-                added = database.ig_queue_add(
-                    url=url,
-                    title=rewritten["title"],
-                    ig_caption=rewritten["instagram_caption"],
-                    flyer_public_url=flyer_public_url,
-                    relevance_score=ig_score,
-                    source=source["name"],
-                )
-                ig_encolado = added
-                logger.info(
-                    f"  → IG cola: score={ig_score}/10 | "
-                    f"{'encolado' if added else 'ya en cola'} | "
-                    f"pendientes={database.ig_queue_count_pending()}"
-                )
-            except Exception as e:
-                logger.error(f"Error generando flyer para IG: {e}")
-            finally:
-                if flyer_path and os.path.exists(flyer_path):
-                    try:
-                        os.unlink(flyer_path)
-                    except Exception:
-                        pass
-        else:
-            logger.info(f"  → IG omitido: score={ig_score}/10 (mínimo {IG_RELEVANCE_MIN})")
-
-        # 7. Registrar en DB
-        database.mark_published(
+        if _publish_pipeline(
             url=url,
-            title=rewritten["title"],
-            source=source["name"],
-            wp_post_id=str(wp_post_id) if wp_post_id else None,
-            fb_post_id=str(fb_post_id) if fb_post_id else None,
-            ig_post_id=None,
-            wa_sent=wa_sent,
-        )
-
-        logger.info(
-            f"Publicado: WP={wp_post_id} | FB={fb_post_id} | "
-            f"IG={'en cola' if ig_encolado else 'omitido'} | WA={wa_sent}"
-        )
-        titulos_recientes.append(rewritten["title"])
-
-        if rewritten.get("region", "Argentina") != "Argentina" and no_argentina_count is not None:
-            no_argentina_count[0] += 1
-
-        processed += 1
+            article_image_url=article.image_url,
+            rewritten=rewritten,
+            source_name=source["name"],
+            titulos_recientes=titulos_recientes,
+            no_argentina_count=no_argentina_count,
+        ):
+            processed += 1
         time.sleep(5)
 
     logger.info(f"  → {source['name']}: {processed} artículos nuevos publicados")
@@ -541,6 +650,13 @@ def run_cycle():
 
     no_argentina_count = [0]
     publicados_tanda = [0]
+
+    # Procesar cola de reintentos ANTES del RSS — garantiza recuperación aunque el artículo
+    # haya desaparecido del feed RSS
+    try:
+        process_retry_queue(titulos_recientes, no_argentina_count)
+    except Exception as e:
+        logger.error(f"Error procesando cola de reintentos: {e}")
 
     original_process = process_source
 
