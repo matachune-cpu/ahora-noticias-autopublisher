@@ -1,0 +1,119 @@
+name: Publicar nota urgente
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL del artículo a publicar'
+        required: true
+        type: string
+      fuente:
+        description: 'Nombre de la fuente (ej: Infobae, El Liberal)'
+        required: false
+        default: 'Nuevo Diario'
+        type: string
+      sticky:
+        description: 'Fijar en portada de WordPress'
+        required: false
+        default: false
+        type: boolean
+      categories:
+        description: 'Categorías (separadas por coma, ej: Política,Nacionales)'
+        required: false
+        default: ''
+        type: string
+      platforms:
+        description: 'Plataformas donde publicar'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - wp_only
+          - wp_fb
+          - wp_ig_fb
+          - no_ig
+      instrucciones:
+        description: 'Instrucciones editoriales adicionales para Gemini (opcional)'
+        required: false
+        default: ''
+        type: string
+      force:
+        description: 'Publicar aunque la URL ya esté en la base de datos'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Habilitar Node.js 24
+        run: echo "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true" >> $GITHUB_ENV
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear archivo .env desde secretos
+        run: |
+          cat > .env << EOF
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SEARCH_API_KEY=${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          GOOGLE_SEARCH_CX=${{ secrets.GOOGLE_SEARCH_CX }}
+          WP_URL=${{ secrets.WP_URL }}
+          WP_USERNAME=${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD=${{ secrets.WP_APP_PASSWORD }}
+          META_ACCESS_TOKEN=${{ secrets.META_ACCESS_TOKEN }}
+          FB_PAGE_ID=${{ secrets.FB_PAGE_ID }}
+          IG_ACCOUNT_ID=${{ secrets.IG_ACCOUNT_ID }}
+          WA_PHONE_NUMBER_ID=${{ secrets.WA_PHONE_NUMBER_ID }}
+          WA_CHANNEL_ID=${{ secrets.WA_CHANNEL_ID }}
+          WA_API_TOKEN=${{ secrets.WA_API_TOKEN }}
+          FLYER_TEMPLATE_PATH=templates/flyer_base.png
+          GEMINI_DAILY_LIMIT=18
+          IMAGE_VALIDATION_VISUAL=false
+          EOF
+
+      - name: Publicar nota urgente
+        run: |
+          ARGS="${{ github.event.inputs.url }}"
+          ARGS="$ARGS --fuente '${{ github.event.inputs.fuente }}'"
+          ARGS="$ARGS --platforms ${{ github.event.inputs.platforms }}"
+
+          if [ "${{ github.event.inputs.sticky }}" = "true" ]; then
+            ARGS="$ARGS --sticky"
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+          if [ -n "${{ github.event.inputs.categories }}" ]; then
+            ARGS="$ARGS --categories '${{ github.event.inputs.categories }}'"
+          fi
+          if [ -n "${{ github.event.inputs.instrucciones }}" ]; then
+            ARGS="$ARGS --instrucciones '${{ github.event.inputs.instrucciones }}'"
+          fi
+
+          eval python _publicar_url.py $ARGS
+
+      - name: Guardar base de datos
+        run: |
+          git config user.name "Ahora Noticias Bot"
+          git config user.email "bot@ahoranoticias.com.ar"
+          git add published_articles.db
+          git diff --staged --quiet || git commit -m "DB: urgente publicado [skip ci]"
+          git push || true

@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import time
 import requests
 from io import BytesIO
 from PIL import Image
@@ -11,6 +13,83 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 _client = None
+
+# ── Presupuesto diario + circuit breaker para Gemini ─────────────────────────
+# Con tier gratuito (20 req/día) esto es crítico para no agotar la cuota.
+
+_QUOTA_FILE = ".gemini_daily_quota.json"
+_COOLDOWN_MINUTES = 180  # tiempo de espera tras un 429 (3 horas)
+
+
+def _today_utc() -> str:
+    from datetime import datetime
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def _load_quota() -> dict:
+    today = _today_utc()
+    try:
+        with open(_QUOTA_FILE) as f:
+            data = json.load(f)
+        if data.get("date") != today:
+            return {"date": today, "count": 0, "cooldown_until": None}
+        return data
+    except Exception:
+        return {"date": today, "count": 0, "cooldown_until": None}
+
+
+def _save_quota(data: dict):
+    try:
+        with open(_QUOTA_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def _daily_limit() -> int:
+    try:
+        return int(os.getenv("GEMINI_DAILY_LIMIT", "18"))
+    except Exception:
+        return 18
+
+
+def _can_call_gemini() -> tuple:
+    """Retorna (puede_llamar: bool, motivo_si_no: str)."""
+    q = _load_quota()
+
+    cooldown_until = q.get("cooldown_until")
+    if cooldown_until:
+        remaining = cooldown_until - time.time()
+        if remaining > 0:
+            return False, f"429 cooldown — {int(remaining / 60)} min restantes"
+
+    limit = _daily_limit()
+    if q["count"] >= limit:
+        return False, f"Cuota diaria agotada: {q['count']}/{limit} llamadas hoy"
+
+    return True, ""
+
+
+def _record_gemini_call():
+    q = _load_quota()
+    q["count"] = q.get("count", 0) + 1
+    _save_quota(q)
+    logger.debug(f"[GEMINI] Llamada registrada: {q['count']}/{_daily_limit()} hoy")
+
+
+def _set_gemini_cooldown():
+    q = _load_quota()
+    q["cooldown_until"] = time.time() + (_COOLDOWN_MINUTES * 60)
+    _save_quota(q)
+    logger.warning(
+        f"[GEMINI] Circuit breaker activado — cooldown de {_COOLDOWN_MINUTES} min "
+        f"(hasta que se reinicie el contador o pasen {_COOLDOWN_MINUTES} min)"
+    )
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(k in msg for k in ("429", "resource_exhausted", "quota", "rate limit"))
 
 
 def _get_client():
@@ -40,13 +119,20 @@ _RESULTADO_NO_PUBLICABLE = {
 def check_watermark(image_url: str) -> bool:
     """
     Usa Gemini Vision para detectar si una imagen tiene marca de agua.
-    Retorna True si tiene marca de agua, False si esta limpia.
+    Retorna True si tiene marca de agua, False si está limpia.
+    Omite la llamada si la cuota diaria está agotada o hay cooldown activo.
     """
+    can_call, reason = _can_call_gemini()
+    if not can_call:
+        logger.warning(f"[GEMINI] check_watermark omitido — {reason}")
+        return False  # conservar la imagen ante la duda
+
     try:
         resp = requests.get(image_url, timeout=10)
         resp.raise_for_status()
         img = Image.open(BytesIO(resp.content))
 
+        _record_gemini_call()
         response = _get_client().models.generate_content(
             model=MODEL,
             contents=[
@@ -60,19 +146,30 @@ def check_watermark(image_url: str) -> bool:
             logger.info(f"Marca de agua detectada en: {image_url}")
         return has_watermark
     except Exception as e:
-        # En caso de error (ej: cuota Gemini agotada) conservamos la imagen.
-        # El filtro por URL (_url_parece_logo) ya descartó los casos obvios antes de llegar acá.
+        if _is_quota_error(e):
+            _set_gemini_cooldown()
         logger.warning(f"No se pudo verificar marca de agua — imagen conservada: {e}")
         return False
 
 
-def rewrite_article(title: str, original_text: str, source_name: str) -> dict:
+def rewrite_article(
+    title: str,
+    original_text: str,
+    source_name: str,
+    extra_instructions: str = "",
+) -> dict:
     """
     Evalua si el articulo es publicable y, de serlo, lo reescribe con Gemini.
 
     Retorna dict con 'es_publicable' (bool).
     Si es False, no se publica en ningun canal.
+    extra_instructions: instrucciones editoriales adicionales (urgencias manuales).
     """
+    can_call, reason = _can_call_gemini()
+    if not can_call:
+        logger.warning(f"[GEMINI] rewrite_article omitido — {reason}: {title[:60]}")
+        return _RESULTADO_NO_PUBLICABLE
+
     prompt = f"""Sos redactor de un medio de noticias argentino llamado Ahora Noticias, con sede en Santiago del Estero.
 
 INSTRUCCION IMPORTANTE: Primero evalua si el texto fuente tiene suficiente contenido para escribir una nota periodistica completa. Devuelve es_publicable=false (y los otros campos en blanco) si el texto:
@@ -109,7 +206,11 @@ TITULO ORIGINAL: {title}
 TEXTO ORIGINAL:
 {original_text[:12000]}"""
 
+    if extra_instructions:
+        prompt += f"\n\nINSTRUCCIONES EDITORIALES ADICIONALES (aplicar obligatoriamente):\n{extra_instructions}"
+
     try:
+        _record_gemini_call()
         response = _get_client().models.generate_content(
             model=MODEL,
             contents=prompt,
@@ -165,6 +266,7 @@ TEXTO ORIGINAL:
         }
 
     except Exception as e:
-        # Fallback NUNCA publica contenido crudo — siempre descarta.
+        if _is_quota_error(e):
+            _set_gemini_cooldown()
         logger.error(f"Rewriter error para '{title[:60]}': {e}")
         return _RESULTADO_NO_PUBLICABLE

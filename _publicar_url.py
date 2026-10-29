@@ -42,14 +42,31 @@ logging.basicConfig(
 logger = logging.getLogger("publicar_url")
 
 
-def publicar(url: str, fuente: str):
+def publicar(
+    url: str,
+    fuente: str,
+    sticky: bool = False,
+    categories: list = None,
+    platforms: str = "all",
+    force: bool = False,
+    instrucciones: str = "",
+):
+    """
+    platforms: 'all' | 'wp_only' | 'wp_fb' | 'wp_ig_fb' | 'no_ig'
+    force: si True, publica aunque la URL ya esté en la DB.
+    instrucciones: instrucciones editoriales adicionales para Gemini.
+    """
     database.init_db()
 
+    do_fb = platforms not in ("wp_only",)
+    do_ig = platforms in ("all", "wp_ig_fb")
+    do_wa = platforms not in ("wp_only",)
+
     logger.info(f"━━━━ Publicando: {url}")
-    logger.info(f"      Fuente: {fuente}")
+    logger.info(f"      Fuente: {fuente} | sticky={sticky} | plataformas={platforms}")
 
     # 1. Verificar si ya fue publicada
-    if database.is_published(url):
+    if not force and database.is_published(url):
         logger.warning("Esta URL ya fue publicada anteriormente. Abortando.")
         sys.exit(0)
 
@@ -61,7 +78,7 @@ def publicar(url: str, fuente: str):
     logger.info(f"Título extraído: {article.title[:80]}")
 
     # 3. Reescribir con Gemini
-    rewritten = rewrite_article(article.title, article.full_text, fuente)
+    rewritten = rewrite_article(article.title, article.full_text, fuente, extra_instructions=instrucciones)
     if not rewritten.get("es_publicable"):
         logger.error("Gemini rechazó el contenido. Abortando.")
         sys.exit(1)
@@ -100,6 +117,14 @@ def publicar(url: str, fuente: str):
             filename=f"foto-{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg",
         )
 
+    # Resolver IDs de categorías si se especificaron
+    cat_ids = []
+    if categories:
+        for cat_name in categories:
+            cat_id = wordpress.get_or_create_category(cat_name.strip())
+            if cat_id:
+                cat_ids.append(cat_id)
+
     # 6. Publicar en WordPress
     wp_post_id, wp_post_url = wordpress.create_post(
         title=rewritten["title"],
@@ -107,6 +132,8 @@ def publicar(url: str, fuente: str):
         original_url=url,
         source_name=fuente,
         featured_media_id=media_id,
+        sticky=sticky,
+        categories=cat_ids or None,
     )
     if not wp_post_id:
         logger.error("WordPress falló. Abortando publicación en redes.")
@@ -115,10 +142,12 @@ def publicar(url: str, fuente: str):
     logger.info(f"WordPress: post creado → {wp_post_url}")
 
     # 7. WhatsApp — puede publicar sin imagen (solo texto + link)
-    wa_sent = whatsapp.send_to_channel(
-        text=rewritten.get("whatsapp_text", ""),
-        wp_post_url=wp_post_url,
-    )
+    wa_sent = False
+    if do_wa:
+        wa_sent = whatsapp.send_to_channel(
+            text=rewritten.get("whatsapp_text", ""),
+            wp_post_url=wp_post_url,
+        )
 
     # GUARD CLAUSE: no publicar en redes sociales sin imagen validada
     if not imagen_validada:
@@ -172,18 +201,20 @@ def publicar(url: str, fuente: str):
                 pass
 
     # 9. Publicar en Facebook — imagen de artículo > flyer
-    fb_image = media_url or flyer_url
-    fb_post_id = facebook.post_link(
-        title=rewritten["title"],
-        wp_post_url=wp_post_url,
-        original_url=url,
-        image_url=fb_image,
-        caption=rewritten.get("facebook_caption"),
-    )
-    logger.info(f"Facebook: {'OK ID=' + str(fb_post_id) if fb_post_id else 'FALLÓ'} | imagen={'sí' if fb_image else 'no'}")
+    fb_post_id = None
+    if do_fb:
+        fb_image = media_url or flyer_url
+        fb_post_id = facebook.post_link(
+            title=rewritten["title"],
+            wp_post_url=wp_post_url,
+            original_url=url,
+            image_url=fb_image,
+            caption=rewritten.get("facebook_caption"),
+        )
+        logger.info(f"Facebook: {'OK ID=' + str(fb_post_id) if fb_post_id else 'FALLÓ'} | imagen={'sí' if fb_image else 'no'}")
 
     # 10. Publicar en Instagram con el mismo flyer
-    if flyer_url:
+    if do_ig and flyer_url:
         try:
             ig_post_id = instagram.post_image(
                 image_path=None,
@@ -218,8 +249,29 @@ def main():
     parser = argparse.ArgumentParser(description="Publica una URL específica en todos los canales.")
     parser.add_argument("url", help="URL del artículo a publicar")
     parser.add_argument("--fuente", default="Nuevo Diario", help="Nombre de la fuente")
+    parser.add_argument("--sticky", action="store_true", help="Fijar en portada de WordPress")
+    parser.add_argument("--categories", default="", help="Categorías separadas por coma (ej: Política,Nacionales)")
+    parser.add_argument(
+        "--platforms",
+        default="all",
+        choices=["all", "wp_only", "wp_fb", "wp_ig_fb", "no_ig"],
+        help="Plataformas donde publicar",
+    )
+    parser.add_argument("--force", action="store_true", help="Publicar aunque la URL ya esté en la DB")
+    parser.add_argument("--instrucciones", default="", help="Instrucciones editoriales adicionales para Gemini")
     args = parser.parse_args()
-    publicar(args.url.strip(), args.fuente.strip())
+
+    cats = [c.strip() for c in args.categories.split(",") if c.strip()] if args.categories else []
+
+    publicar(
+        url=args.url.strip(),
+        fuente=args.fuente.strip(),
+        sticky=args.sticky,
+        categories=cats,
+        platforms=args.platforms,
+        force=args.force,
+        instrucciones=args.instrucciones,
+    )
 
 
 if __name__ == "__main__":

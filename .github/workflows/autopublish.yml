@@ -50,6 +50,8 @@ jobs:
           CHECK_INTERVAL_MINUTES=30
           MAX_ARTICLES_PER_RUN=3
           FLYER_TEMPLATE_PATH=templates/flyer_base.png
+          GEMINI_DAILY_LIMIT=18
+          IMAGE_VALIDATION_VISUAL=false
           EOF
 
       - name: Ejecutar ciclo de publicación

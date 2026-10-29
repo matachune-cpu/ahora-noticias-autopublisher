@@ -20,6 +20,10 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+# Desactivar Gemini Vision para ahorrar cuota (IMAGE_VALIDATION_VISUAL=false por defecto).
+# La validación técnica (tamaño, resolución, placeholder) es suficiente en producción.
+_VISUAL_VALIDATION_ENABLED = os.getenv("IMAGE_VALIDATION_VISUAL", "false").lower() not in ("false", "0", "no")
+
 # ── Constantes de validación ───────────────────────────────────────────────────
 
 TECHNICAL_MIN_SIZE_BYTES = 5 * 1024        # 5 KB mínimo
@@ -400,35 +404,40 @@ def _evaluate_candidate(
         # No devolvemos rechazado aquí — semántica tiene umbral bajo y es orientativa
         # Si la visual pasa, aceptamos igual con score compuesto bajo
 
-    # Validación visual con Gemini
-    vision = _validate_with_vision(title, summary, image_url, img_bytes=img_bytes)
-    visual_score = vision["score"]
+    # Validación visual con Gemini (omitida si IMAGE_VALIDATION_VISUAL=false)
+    if _VISUAL_VALIDATION_ENABLED:
+        vision = _validate_with_vision(title, summary, image_url, img_bytes=img_bytes)
+        visual_score = vision["score"]
 
-    if not vision["passed"]:
-        reason = vision.get("rejection_reason", "validación visual fallida")
-        logger.debug(f"    Visual parcial: {reason}")
-        # Hard reject solo si Gemini dice explícitamente que es engañosa, inapropiada o placeholder
-        # — NO rechazar solo por confianza baja en imagen contextual válida
-        if (not vision.get("appropriate", True)
-                or vision.get("risk_of_misleading", False)
-                or vision.get("is_placeholder", False)):
-            return {
-                "status": "REJECTED",
-                "strategy": strategy,
-                "image_url": image_url,
-                "rejection_reason": f"[VISUAL] {reason}",
-                "technical_score": technical_score,
-                "semantic_score": semantic_score,
-                "visual_score": visual_score,
-                "vision_result": vision,
-            }
-        # Baja confianza pero imagen apropiada → continuar con score reducido
-        rejection_reasons.append(f"[VISUAL-BAJA-CONFIANZA] {reason}")
+        if not vision["passed"]:
+            reason = vision.get("rejection_reason", "validación visual fallida")
+            logger.debug(f"    Visual parcial: {reason}")
+            if (not vision.get("appropriate", True)
+                    or vision.get("risk_of_misleading", False)
+                    or vision.get("is_placeholder", False)):
+                return {
+                    "status": "REJECTED",
+                    "strategy": strategy,
+                    "image_url": image_url,
+                    "rejection_reason": f"[VISUAL] {reason}",
+                    "technical_score": technical_score,
+                    "semantic_score": semantic_score,
+                    "visual_score": visual_score,
+                    "vision_result": vision,
+                }
+            rejection_reasons.append(f"[VISUAL-BAJA-CONFIANZA] {reason}")
 
-    # Score final ponderado
-    final_score = technical_score * 0.20 + semantic_score * 0.35 + visual_score * 0.45
+        final_score = technical_score * 0.20 + semantic_score * 0.35 + visual_score * 0.45
+        min_score = FINAL_MIN_SCORE
+    else:
+        # Sin visual: ponderar solo técnica + semántica, umbral más bajo
+        visual_score = 50
+        vision = {"passed": True, "appropriate": True, "confidence": 50, "reason": "visual omitida"}
+        final_score = technical_score * 0.55 + semantic_score * 0.45
+        min_score = 30
+        logger.debug("    Validación visual omitida (IMAGE_VALIDATION_VISUAL=false)")
 
-    if final_score < FINAL_MIN_SCORE:
+    if final_score < min_score:
         reason = (
             f"Score final insuficiente: {final_score:.1f} "
             f"(técnica={technical_score}, semántica={semantic_score}, visual={visual_score})"
