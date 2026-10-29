@@ -35,7 +35,10 @@ class TestCircuitBreakerUnit(unittest.TestCase):
     def tearDown(self):
         import rewriter
         rewriter._QUOTA_FILE = self._orig_quota_file
-        os.unlink(self.quota_file)
+        try:
+            os.unlink(self.quota_file)
+        except FileNotFoundError:
+            pass  # el test lo borró intencionalmente (test_fresh_quota_allows_call)
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
