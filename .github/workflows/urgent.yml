@@ -44,6 +44,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: autopublisher         # comparte grupo con autopublish.yml — nunca corren en paralelo
+  cancel-in-progress: false    # el urgente espera en cola, no se cancela
+
 jobs:
   publicar:
     runs-on: ubuntu-latest
@@ -115,5 +119,6 @@ jobs:
           git config user.name "Ahora Noticias Bot"
           git config user.email "bot@ahoranoticias.com.ar"
           git add published_articles.db
+          git add .gemini_daily_quota.json || true
           git diff --staged --quiet || git commit -m "DB: urgente publicado [skip ci]"
           git push || true

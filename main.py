@@ -226,6 +226,12 @@ def process_source(source: dict, titulos_recientes: list[str], no_argentina_coun
         rewritten = rewrite_article(article.title, article.full_text, source["name"])
 
         if not rewritten.get("es_publicable", False):
+            if rewritten.get("quota_exhausted"):
+                logger.warning(
+                    f"  [CUOTA AGOTADA] Artículo disponible para reintento posterior: "
+                    f"{entry['title'][:70]}"
+                )
+                continue  # NO mark_seen() — queda disponible para el próximo run
             logger.info(
                 f"  [NO PUBLICABLE] Gemini rechazó el contenido: "
                 f"{(rewritten.get('title') or entry['title'])[:70]}"

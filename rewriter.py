@@ -168,7 +168,7 @@ def rewrite_article(
     can_call, reason = _can_call_gemini()
     if not can_call:
         logger.warning(f"[GEMINI] rewrite_article omitido — {reason}: {title[:60]}")
-        return _RESULTADO_NO_PUBLICABLE
+        return {**_RESULTADO_NO_PUBLICABLE, "quota_exhausted": True}
 
     prompt = f"""Sos redactor de un medio de noticias argentino llamado Ahora Noticias, con sede en Santiago del Estero.
 
@@ -268,5 +268,7 @@ TEXTO ORIGINAL:
     except Exception as e:
         if _is_quota_error(e):
             _set_gemini_cooldown()
+            logger.error(f"Rewriter error de cuota para '{title[:60]}': {e}")
+            return {**_RESULTADO_NO_PUBLICABLE, "quota_exhausted": True}
         logger.error(f"Rewriter error para '{title[:60]}': {e}")
         return _RESULTADO_NO_PUBLICABLE
